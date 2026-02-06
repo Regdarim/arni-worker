@@ -32,6 +32,9 @@ export default {
     const validKey = env.API_KEY || 'arni-2026';
 
     try {
+      // Track this request for Cloudflare usage stats
+      await trackCloudflareUsage(env, path);
+
       // ==================== PUBLIC ENDPOINTS ====================
 
       // Status page
@@ -44,7 +47,8 @@ export default {
       // Dashboard - Model Usage Analytics
       if (path === '/dashboard' && method === 'GET') {
         const stats = await getModelStats(env);
-        return new Response(dashboardPage(stats), {
+        const cfUsage = await getCloudflareUsage(env);
+        return new Response(dashboardPage(stats, cfUsage), {
           headers: { 'Content-Type': 'text/html', ...corsHeaders },
         });
       }
@@ -56,7 +60,7 @@ export default {
           status: 'ok',
           agent: 'arni',
           timestamp: new Date().toISOString(),
-          version: '2.2.0',
+          version: '2.4.0',
           kv: env.MEMORY ? 'connected' : 'not bound',
           stats,
         }, corsHeaders);
@@ -423,6 +427,57 @@ async function incrementStat(env, key) {
   await env.MEMORY.put('stats', JSON.stringify(stats));
 }
 
+async function trackCloudflareUsage(env, path) {
+  if (!env.MEMORY) return;
+  const today = new Date().toISOString().split('T')[0];
+  const key = `cf_usage:${today}`;
+
+  try {
+    const existing = await env.MEMORY.get(key);
+    const usage = existing ? JSON.parse(existing) : {
+      requests: 0,
+      kv_reads: 0,
+      kv_writes: 0,
+      date: today
+    };
+
+    usage.requests++;
+    // Estimate KV operations based on path
+    if (path.includes('/memory') || path.includes('/usage') || path.includes('/tasks') || path.includes('/notes') || path.includes('/logs')) {
+      usage.kv_reads++;
+    }
+    if (path.includes('/webhook') || path.includes('/usage') || path.includes('/tasks') || path.includes('/notes')) {
+      usage.kv_writes++;
+    }
+
+    await env.MEMORY.put(key, JSON.stringify(usage), { expirationTtl: 86400 * 7 });
+  } catch (e) {
+    // Silent fail - don't break main request
+  }
+}
+
+async function getCloudflareUsage(env) {
+  if (!env.MEMORY) return getDefaultCfUsage();
+  const today = new Date().toISOString().split('T')[0];
+  const key = `cf_usage:${today}`;
+
+  try {
+    const usage = await env.MEMORY.get(key);
+    return usage ? JSON.parse(usage) : getDefaultCfUsage();
+  } catch (e) {
+    return getDefaultCfUsage();
+  }
+}
+
+function getDefaultCfUsage() {
+  return {
+    requests: 0,
+    kv_reads: 0,
+    kv_writes: 0,
+    date: new Date().toISOString().split('T')[0]
+  };
+}
+
 async function getModelStats(env) {
   if (!env.MEMORY) return getDefaultModelStats();
   const stats = await env.MEMORY.get('model_stats');
@@ -507,7 +562,7 @@ async function updateModelStats(env, usage) {
   await env.MEMORY.put('model_stats', JSON.stringify(stats));
 }
 
-function dashboardPage(stats) {
+function dashboardPage(stats, cfUsage = {}) {
   const providers = stats.providers || {};
   const models = stats.models || {};
   const taskTypes = stats.task_types || {};
@@ -909,8 +964,51 @@ function dashboardPage(stats) {
       </table>
     </div>
 
+    <!-- Cloudflare Usage -->
+    <div class="config-section" style="margin-top:2rem;">
+      <h3>☁️ Cloudflare Free Tier Usage (Today)</h3>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-top:1rem;">
+        <div style="background:var(--bg-secondary);padding:1rem;border-radius:0.75rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="color:var(--text-secondary);">Workers Requests</span>
+            <span style="font-size:0.75rem;color:${(cfUsage.requests || 0) > 80000 ? '#ef4444' : (cfUsage.requests || 0) > 50000 ? '#f59e0b' : '#10b981'};">${((cfUsage.requests || 0) / 100000 * 100).toFixed(1)}%</span>
+          </div>
+          <div style="font-size:1.5rem;font-weight:700;color:var(--text-primary);">${(cfUsage.requests || 0).toLocaleString()}</div>
+          <div style="font-size:0.75rem;color:var(--text-secondary);">of 100,000/day FREE</div>
+          <div style="margin-top:0.5rem;height:4px;background:var(--border);border-radius:2px;overflow:hidden;">
+            <div style="height:100%;width:${Math.min((cfUsage.requests || 0) / 100000 * 100, 100)}%;background:${(cfUsage.requests || 0) > 80000 ? '#ef4444' : (cfUsage.requests || 0) > 50000 ? '#f59e0b' : '#10b981'};"></div>
+          </div>
+        </div>
+        <div style="background:var(--bg-secondary);padding:1rem;border-radius:0.75rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="color:var(--text-secondary);">KV Reads</span>
+            <span style="font-size:0.75rem;color:${(cfUsage.kv_reads || 0) > 80000 ? '#ef4444' : (cfUsage.kv_reads || 0) > 50000 ? '#f59e0b' : '#10b981'};">${((cfUsage.kv_reads || 0) / 100000 * 100).toFixed(1)}%</span>
+          </div>
+          <div style="font-size:1.5rem;font-weight:700;color:var(--text-primary);">${(cfUsage.kv_reads || 0).toLocaleString()}</div>
+          <div style="font-size:0.75rem;color:var(--text-secondary);">of 100,000/day FREE</div>
+          <div style="margin-top:0.5rem;height:4px;background:var(--border);border-radius:2px;overflow:hidden;">
+            <div style="height:100%;width:${Math.min((cfUsage.kv_reads || 0) / 100000 * 100, 100)}%;background:${(cfUsage.kv_reads || 0) > 80000 ? '#ef4444' : (cfUsage.kv_reads || 0) > 50000 ? '#f59e0b' : '#10b981'};"></div>
+          </div>
+        </div>
+        <div style="background:var(--bg-secondary);padding:1rem;border-radius:0.75rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="color:var(--text-secondary);">KV Writes</span>
+            <span style="font-size:0.75rem;color:${(cfUsage.kv_writes || 0) > 800 ? '#ef4444' : (cfUsage.kv_writes || 0) > 500 ? '#f59e0b' : '#10b981'};">${((cfUsage.kv_writes || 0) / 1000 * 100).toFixed(1)}%</span>
+          </div>
+          <div style="font-size:1.5rem;font-weight:700;color:var(--text-primary);">${(cfUsage.kv_writes || 0).toLocaleString()}</div>
+          <div style="font-size:0.75rem;color:var(--text-secondary);">of 1,000/day FREE</div>
+          <div style="margin-top:0.5rem;height:4px;background:var(--border);border-radius:2px;overflow:hidden;">
+            <div style="height:100%;width:${Math.min((cfUsage.kv_writes || 0) / 1000 * 100, 100)}%;background:${(cfUsage.kv_writes || 0) > 800 ? '#ef4444' : (cfUsage.kv_writes || 0) > 500 ? '#f59e0b' : '#10b981'};"></div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:1rem;font-size:0.8rem;color:var(--text-secondary);text-align:center;">
+        🟢 &lt;50% | 🟡 50-80% | 🔴 &gt;80% — Resets daily at midnight UTC
+      </div>
+    </div>
+
     <footer>
-      <p>Arni v2.2.0 | <a href="/">API Docs</a> | Last updated: ${stats.lastUpdated || 'Never'}</p>
+      <p>Arni v2.4.0 | <a href="/">API Docs</a> | Last updated: ${stats.lastUpdated || 'Never'}</p>
     </footer>
   </div>
 
