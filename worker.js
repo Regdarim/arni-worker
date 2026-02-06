@@ -1,5 +1,5 @@
 /**
- * Arni Worker v2.2.0 - Full Autonomous Agent Platform
+ * Arni Worker v2.5.0 - Full Autonomous Agent Platform
  *
  * Features:
  * - Webhook receiver
@@ -48,7 +48,8 @@ export default {
       if (path === '/dashboard' && method === 'GET') {
         const stats = await getModelStats(env);
         const cfUsage = await getCloudflareUsage(env);
-        return new Response(dashboardPage(stats, cfUsage), {
+        const maxUsage = await getClaudeMaxUsage(env);
+        return new Response(dashboardPage(stats, cfUsage, maxUsage), {
           headers: { 'Content-Type': 'text/html', ...corsHeaders },
         });
       }
@@ -60,7 +61,7 @@ export default {
           status: 'ok',
           agent: 'arni',
           timestamp: new Date().toISOString(),
-          version: '2.4.0',
+          version: '2.5.0',
           kv: env.MEMORY ? 'connected' : 'not bound',
           stats,
         }, corsHeaders);
@@ -478,6 +479,68 @@ function getDefaultCfUsage() {
   };
 }
 
+// Claude Max Usage Tracking (5-hour rolling window, ~88k tokens for Max5)
+async function getClaudeMaxUsage(env) {
+  if (!env.MEMORY) return getDefaultMaxUsage();
+  const key = 'claude_max_usage';
+
+  try {
+    const data = await env.MEMORY.get(key);
+    if (!data) return getDefaultMaxUsage();
+
+    const usage = JSON.parse(data);
+    const now = Date.now();
+    const windowStart = usage.windowStart || now;
+    const windowDuration = 5 * 60 * 60 * 1000; // 5 hours in ms
+
+    // Check if window has expired (5 hours)
+    if (now - windowStart > windowDuration) {
+      // Reset window
+      const reset = getDefaultMaxUsage();
+      await env.MEMORY.put(key, JSON.stringify(reset));
+      return reset;
+    }
+
+    // Calculate time remaining
+    const timeRemaining = windowDuration - (now - windowStart);
+    usage.timeRemainingMs = timeRemaining;
+    usage.timeRemainingHours = (timeRemaining / (1000 * 60 * 60)).toFixed(1);
+
+    return usage;
+  } catch (e) {
+    return getDefaultMaxUsage();
+  }
+}
+
+function getDefaultMaxUsage() {
+  return {
+    tokensUsed: 0,
+    tokensLimit: 88000, // ~88k for Max5 plan
+    windowStart: Date.now(),
+    timeRemainingMs: 5 * 60 * 60 * 1000,
+    timeRemainingHours: '5.0',
+    sessions: 0,
+    lastSession: null
+  };
+}
+
+async function updateClaudeMaxUsage(env, tokensIn, tokensOut) {
+  if (!env.MEMORY) return;
+  const key = 'claude_max_usage';
+  const usage = await getClaudeMaxUsage(env);
+
+  // Add tokens
+  usage.tokensUsed += (tokensIn + tokensOut);
+  usage.sessions++;
+  usage.lastSession = new Date().toISOString();
+
+  // Don't overwrite calculated fields
+  delete usage.timeRemainingMs;
+  delete usage.timeRemainingHours;
+
+  await env.MEMORY.put(key, JSON.stringify(usage));
+}
+
 async function getModelStats(env) {
   if (!env.MEMORY) return getDefaultModelStats();
   const stats = await env.MEMORY.get('model_stats');
@@ -505,6 +568,11 @@ function getDefaultModelStats() {
 async function updateModelStats(env, usage) {
   if (!env.MEMORY) return;
   const stats = await getModelStats(env);
+
+  // Update Claude Max usage if using Anthropic/Opus
+  if (usage.provider === 'anthropic' && (usage.model || '').toLowerCase().includes('opus')) {
+    await updateClaudeMaxUsage(env, usage.tokens_in || 0, usage.tokens_out || 0);
+  }
 
   // Update provider stats
   if (!stats.providers[usage.provider]) {
@@ -562,12 +630,21 @@ async function updateModelStats(env, usage) {
   await env.MEMORY.put('model_stats', JSON.stringify(stats));
 }
 
-function dashboardPage(stats, cfUsage = {}) {
+function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
   const providers = stats.providers || {};
   const models = stats.models || {};
   const taskTypes = stats.task_types || {};
   const daily = stats.daily || {};
   const totals = stats.totals || { requests: 0, tokens_in: 0, tokens_out: 0, cost: 0, savings: 0 };
+
+  // Claude Max usage defaults
+  const maxTokensUsed = maxUsage.tokensUsed || 0;
+  const maxTokensLimit = maxUsage.tokensLimit || 88000;
+  const maxTimeRemaining = maxUsage.timeRemainingHours || '5.0';
+  const maxSessions = maxUsage.sessions || 0;
+  const maxPercentUsed = Math.min((maxTokensUsed / maxTokensLimit) * 100, 100);
+  const maxTokensRemaining = Math.max(maxTokensLimit - maxTokensUsed, 0);
+  const maxLastSession = maxUsage.lastSession ? new Date(maxUsage.lastSession).toLocaleTimeString() : 'Never';
 
   // Get last 7 days for chart
   const last7Days = [];
@@ -826,6 +903,51 @@ function dashboardPage(stats, cfUsage = {}) {
       </div>
     </header>
 
+    <!-- Claude Max Usage (Top Priority) -->
+    <div class="config-section" style="margin-bottom:1.5rem;background:linear-gradient(135deg, rgba(124,58,237,0.15), rgba(167,139,250,0.05));border:1px solid #7c3aed;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+        <h3 style="margin:0;color:#a78bfa;display:flex;align-items:center;gap:0.5rem;">
+          <span style="font-size:1.2rem;">🟣</span> Claude Max Usage (Opus 4.6)
+        </h3>
+        <div style="display:flex;align-items:center;gap:0.5rem;background:rgba(124,58,237,0.2);padding:0.35rem 0.75rem;border-radius:1rem;">
+          <span style="color:var(--text-secondary);font-size:0.8rem;">Window resets in:</span>
+          <span style="color:#a78bfa;font-weight:600;">${maxTimeRemaining}h</span>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.5rem;">
+        <!-- Main Progress -->
+        <div style="grid-column:span 2;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:0.5rem;">
+            <span style="font-size:2rem;font-weight:700;color:${maxPercentUsed > 80 ? '#ef4444' : maxPercentUsed > 50 ? '#f59e0b' : '#a78bfa'};">${formatTokens(maxTokensUsed)}</span>
+            <span style="color:var(--text-secondary);font-size:0.9rem;">of ${formatTokens(maxTokensLimit)} tokens</span>
+          </div>
+          <div style="height:12px;background:rgba(255,255,255,0.1);border-radius:6px;overflow:hidden;margin-bottom:0.75rem;">
+            <div style="height:100%;width:${maxPercentUsed}%;background:linear-gradient(90deg, #7c3aed, ${maxPercentUsed > 80 ? '#ef4444' : maxPercentUsed > 50 ? '#f59e0b' : '#a78bfa'});transition:width 0.5s;"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:0.85rem;">
+            <span style="color:var(--text-secondary);">${maxPercentUsed.toFixed(1)}% used</span>
+            <span style="color:#10b981;font-weight:500;">${formatTokens(maxTokensRemaining)} remaining</span>
+          </div>
+        </div>
+
+        <!-- Quick Stats -->
+        <div style="display:flex;flex-direction:column;gap:0.75rem;">
+          <div style="background:var(--bg-secondary);padding:0.75rem;border-radius:0.5rem;">
+            <div style="color:var(--text-secondary);font-size:0.75rem;">Sessions this window</div>
+            <div style="font-size:1.25rem;font-weight:600;color:var(--text-primary);">${maxSessions}</div>
+          </div>
+          <div style="background:var(--bg-secondary);padding:0.75rem;border-radius:0.5rem;">
+            <div style="color:var(--text-secondary);font-size:0.75rem;">Last session</div>
+            <div style="font-size:0.9rem;color:var(--text-primary);">${maxLastSession}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Proactive Usage Suggestion -->
+      ${maxTokensRemaining > 20000 ? renderProactiveBox(maxTokensRemaining) : ''}
+    </div>
+
     <!-- Monthly Subscriptions Summary -->
     <div class="savings-highlight">
       <div class="big">$103/mo</div>
@@ -1008,7 +1130,7 @@ function dashboardPage(stats, cfUsage = {}) {
     </div>
 
     <footer>
-      <p>Arni v2.4.0 | <a href="/">API Docs</a> | Last updated: ${stats.lastUpdated || 'Never'}</p>
+      <p>Arni v2.5.0 | <a href="/">API Docs</a> | Last updated: ${stats.lastUpdated || 'Never'}</p>
     </footer>
   </div>
 
@@ -1102,6 +1224,29 @@ function renderModelRows(models) {
       const costText = data.cost === 0 ? 'FREE' : '$' + data.cost.toFixed(4);
       return '<tr><td><code>' + model + '</code></td><td>' + data.requests.toLocaleString() + '</td><td>' + formatTokens(data.tokens_in) + '</td><td>' + formatTokens(data.tokens_out) + '</td><td class="cost ' + costClass + '">' + costText + '</td></tr>';
     }).join('');
+}
+
+function renderProactiveBox(tokensRemaining) {
+  const canDoTasks = [];
+  if (tokensRemaining >= 50000) canDoTasks.push('Deep architecture review');
+  if (tokensRemaining >= 40000) canDoTasks.push('Comprehensive code audit');
+  if (tokensRemaining >= 30000) canDoTasks.push('Complex feature planning');
+  if (tokensRemaining >= 20000) canDoTasks.push('Security analysis');
+  if (tokensRemaining >= 10000) canDoTasks.push('Agent orchestration task');
+
+  const suggestions = canDoTasks.slice(0, 3);
+  if (suggestions.length === 0) return '';
+
+  return '<div style="margin-top:1rem;padding:1rem;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);border-radius:0.75rem;">' +
+    '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">' +
+      '<span style="color:#10b981;font-weight:600;">Proactive Usage Available</span>' +
+      '<span style="background:#10b981;color:#000;font-size:0.7rem;padding:0.2rem 0.5rem;border-radius:1rem;">Use remaining quota</span>' +
+    '</div>' +
+    '<div style="color:var(--text-secondary);font-size:0.85rem;">With ' + formatTokens(tokensRemaining) + ' tokens remaining, you can still do:</div>' +
+    '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.5rem;">' +
+      suggestions.map(function(s) { return '<span style="background:rgba(16,185,129,0.2);color:#34d399;padding:0.25rem 0.75rem;border-radius:1rem;font-size:0.8rem;">' + s + '</span>'; }).join('') +
+    '</div>' +
+  '</div>';
 }
 
 function renderModelTaskMatrix(models, taskTypes, matrix) {
