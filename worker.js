@@ -1,5 +1,5 @@
 /**
- * Arni Worker v2.1.0 - Full Autonomous Agent Platform
+ * Arni Worker v2.2.0 - Full Autonomous Agent Platform
  *
  * Features:
  * - Webhook receiver
@@ -56,7 +56,7 @@ export default {
           status: 'ok',
           agent: 'arni',
           timestamp: new Date().toISOString(),
-          version: '2.1.0',
+          version: '2.2.0',
           kv: env.MEMORY ? 'connected' : 'not bound',
           stats,
         }, corsHeaders);
@@ -440,6 +440,7 @@ function getDefaultModelStats() {
     },
     models: {},
     task_types: {},
+    model_task_matrix: {},
     daily: {},
     totals: { requests: 0, tokens_in: 0, tokens_out: 0, cost: 0, savings: 0 },
     lastUpdated: new Date().toISOString(),
@@ -476,6 +477,11 @@ async function updateModelStats(env, usage) {
   stats.task_types[usage.task_type].tokens_in += usage.tokens_in;
   stats.task_types[usage.task_type].tokens_out += usage.tokens_out;
   stats.task_types[usage.task_type].cost += usage.cost;
+
+  // Update model→task matrix
+  if (!stats.model_task_matrix) stats.model_task_matrix = {};
+  if (!stats.model_task_matrix[usage.model]) stats.model_task_matrix[usage.model] = {};
+  stats.model_task_matrix[usage.model][usage.task_type] = (stats.model_task_matrix[usage.model][usage.task_type] || 0) + 1;
 
   // Update daily stats
   const today = new Date().toISOString().split('T')[0];
@@ -811,6 +817,13 @@ function dashboardPage(stats) {
       </div>
     </div>
 
+    <!-- Model → Task Matrix -->
+    <div class="table-card" style="margin-bottom: 2rem;">
+      <h3>🎯 Model → Task Type Usage</h3>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.9rem;">Which models are used for which types of work</p>
+      ${renderModelTaskMatrix(models, taskTypes, stats.model_task_matrix || {})}
+    </div>
+
     <!-- Routing Config -->
     <div class="config-section">
       <h3>Active Routing Configuration</h3>
@@ -831,9 +844,9 @@ function dashboardPage(stats) {
           <div class="tier-cost">~$0.01/1k tokens</div>
         </div>
         <div class="tier tier-4">
-          <div class="tier-name">🟣 Tier 4 - Critical</div>
-          <div class="tier-models">Claude Opus 4.6</div>
-          <div class="tier-cost">~$0.075/1k tokens</div>
+          <div class="tier-name">🟣 Tier 4 - Critical/Strategic</div>
+          <div class="tier-models">Claude Opus 4.6 (Max subscription)</div>
+          <div class="tier-cost">Business planning, architecture, high-level strategy</div>
         </div>
       </div>
     </div>
@@ -878,7 +891,7 @@ function dashboardPage(stats) {
     </div>
 
     <footer>
-      <p>Arni v2.1.0 | <a href="/">API Docs</a> | Last updated: ${stats.lastUpdated || 'Never'}</p>
+      <p>Arni v2.2.0 | <a href="/">API Docs</a> | Last updated: ${stats.lastUpdated || 'Never'}</p>
     </footer>
   </div>
 
@@ -965,6 +978,38 @@ function renderModelRows(models) {
       const costText = data.cost === 0 ? 'FREE' : '$' + data.cost.toFixed(4);
       return '<tr><td><code>' + model + '</code></td><td>' + data.requests.toLocaleString() + '</td><td>' + formatTokens(data.tokens_in) + '</td><td>' + formatTokens(data.tokens_out) + '</td><td class="cost ' + costClass + '">' + costText + '</td></tr>';
     }).join('');
+}
+
+function renderModelTaskMatrix(models, taskTypes, matrix) {
+  // Build matrix from stored data or show placeholder
+  const modelList = Object.keys(models).slice(0, 8);
+  const taskList = Object.keys(taskTypes).slice(0, 6);
+
+  if (modelList.length === 0 || taskList.length === 0) {
+    return '<div style="text-align:center;color:var(--text-secondary);padding:2rem;">No usage data yet. Start using models to see the matrix.</div>';
+  }
+
+  let html = '<div style="overflow-x:auto;"><table style="min-width:600px;">';
+  html += '<thead><tr><th>Model</th>';
+  taskList.forEach(task => {
+    html += '<th style="text-align:center;font-size:0.75rem;">' + task + '</th>';
+  });
+  html += '</tr></thead><tbody>';
+
+  modelList.forEach(model => {
+    const modelData = matrix[model] || {};
+    html += '<tr><td><code style="font-size:0.8rem;">' + model.split('/').pop() + '</code></td>';
+    taskList.forEach(task => {
+      const count = modelData[task] || 0;
+      const intensity = Math.min(count / 10, 1);
+      const bg = count > 0 ? 'rgba(0,255,136,' + (0.1 + intensity * 0.4) + ')' : 'transparent';
+      html += '<td style="text-align:center;background:' + bg + ';font-size:0.85rem;">' + (count || '-') + '</td>';
+    });
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+  return html;
 }
 
 function statusPage() {
