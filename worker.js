@@ -1,5 +1,5 @@
 /**
- * Arni Worker v2.0.0 - Full Autonomous Agent Platform
+ * Arni Worker v2.1.0 - Full Autonomous Agent Platform
  *
  * Features:
  * - Webhook receiver
@@ -41,6 +41,14 @@ export default {
         });
       }
 
+      // Dashboard - Model Usage Analytics
+      if (path === '/dashboard' && method === 'GET') {
+        const stats = await getModelStats(env);
+        return new Response(dashboardPage(stats), {
+          headers: { 'Content-Type': 'text/html', ...corsHeaders },
+        });
+      }
+
       // Health check
       if (path === '/health' && method === 'GET') {
         const stats = await getStats(env);
@@ -48,7 +56,7 @@ export default {
           status: 'ok',
           agent: 'arni',
           timestamp: new Date().toISOString(),
-          version: '2.0.1',
+          version: '2.1.0',
           kv: env.MEMORY ? 'connected' : 'not bound',
           stats,
         }, corsHeaders);
@@ -315,6 +323,54 @@ export default {
         return json({ stats }, corsHeaders);
       }
 
+      // ==================== MODEL USAGE ====================
+
+      // Log model usage
+      if (path === '/usage' && method === 'POST') {
+        if (!env.MEMORY) return json({ error: 'KV not bound' }, corsHeaders, 500);
+        const body = await request.json();
+        const { provider, model, tokens_in, tokens_out, cost, task_type, success } = body;
+
+        const id = `usage:${Date.now()}`;
+        const usage = {
+          timestamp: new Date().toISOString(),
+          provider: provider || 'unknown',
+          model: model || 'unknown',
+          tokens_in: tokens_in || 0,
+          tokens_out: tokens_out || 0,
+          cost: cost || 0,
+          task_type: task_type || 'general',
+          success: success !== false,
+        };
+
+        await env.MEMORY.put(id, JSON.stringify(usage), { expirationTtl: 86400 * 90 }); // 90 days
+
+        // Update aggregated stats
+        await updateModelStats(env, usage);
+
+        return json({ logged: true, id }, corsHeaders);
+      }
+
+      // Get usage history
+      if (path === '/usage' && method === 'GET') {
+        if (!env.MEMORY) return json({ error: 'KV not bound' }, corsHeaders, 500);
+        const limit = parseInt(url.searchParams.get('limit') || '100');
+        const list = await env.MEMORY.list({ prefix: 'usage:', limit });
+        const usage = await Promise.all(
+          list.keys.map(async k => {
+            const val = await env.MEMORY.get(k.name);
+            return val ? { id: k.name, ...JSON.parse(val) } : null;
+          })
+        );
+        return json({ usage: usage.filter(Boolean).reverse() }, corsHeaders);
+      }
+
+      // Get model stats
+      if (path === '/usage/stats' && method === 'GET') {
+        const stats = await getModelStats(env);
+        return json({ stats }, corsHeaders);
+      }
+
       // 404
       return new Response('Not Found', { status: 404, headers: corsHeaders });
 
@@ -365,6 +421,550 @@ async function incrementStat(env, key) {
   stats[key] = (stats[key] || 0) + 1;
   stats.lastUpdated = new Date().toISOString();
   await env.MEMORY.put('stats', JSON.stringify(stats));
+}
+
+async function getModelStats(env) {
+  if (!env.MEMORY) return getDefaultModelStats();
+  const stats = await env.MEMORY.get('model_stats');
+  return stats ? JSON.parse(stats) : getDefaultModelStats();
+}
+
+function getDefaultModelStats() {
+  return {
+    providers: {
+      anthropic: { requests: 0, tokens_in: 0, tokens_out: 0, cost: 0 },
+      openrouter: { requests: 0, tokens_in: 0, tokens_out: 0, cost: 0 },
+      z_ai: { requests: 0, tokens_in: 0, tokens_out: 0, cost: 0 },
+      gemini: { requests: 0, tokens_in: 0, tokens_out: 0, cost: 0 },
+      local: { requests: 0, tokens_in: 0, tokens_out: 0, cost: 0 },
+    },
+    models: {},
+    task_types: {},
+    daily: {},
+    totals: { requests: 0, tokens_in: 0, tokens_out: 0, cost: 0, savings: 0 },
+    lastUpdated: new Date().toISOString(),
+  };
+}
+
+async function updateModelStats(env, usage) {
+  if (!env.MEMORY) return;
+  const stats = await getModelStats(env);
+
+  // Update provider stats
+  if (!stats.providers[usage.provider]) {
+    stats.providers[usage.provider] = { requests: 0, tokens_in: 0, tokens_out: 0, cost: 0 };
+  }
+  stats.providers[usage.provider].requests++;
+  stats.providers[usage.provider].tokens_in += usage.tokens_in;
+  stats.providers[usage.provider].tokens_out += usage.tokens_out;
+  stats.providers[usage.provider].cost += usage.cost;
+
+  // Update model stats
+  if (!stats.models[usage.model]) {
+    stats.models[usage.model] = { requests: 0, tokens_in: 0, tokens_out: 0, cost: 0 };
+  }
+  stats.models[usage.model].requests++;
+  stats.models[usage.model].tokens_in += usage.tokens_in;
+  stats.models[usage.model].tokens_out += usage.tokens_out;
+  stats.models[usage.model].cost += usage.cost;
+
+  // Update task type stats
+  if (!stats.task_types[usage.task_type]) {
+    stats.task_types[usage.task_type] = { requests: 0, tokens_in: 0, tokens_out: 0, cost: 0 };
+  }
+  stats.task_types[usage.task_type].requests++;
+  stats.task_types[usage.task_type].tokens_in += usage.tokens_in;
+  stats.task_types[usage.task_type].tokens_out += usage.tokens_out;
+  stats.task_types[usage.task_type].cost += usage.cost;
+
+  // Update daily stats
+  const today = new Date().toISOString().split('T')[0];
+  if (!stats.daily[today]) {
+    stats.daily[today] = { requests: 0, tokens_in: 0, tokens_out: 0, cost: 0 };
+  }
+  stats.daily[today].requests++;
+  stats.daily[today].tokens_in += usage.tokens_in;
+  stats.daily[today].tokens_out += usage.tokens_out;
+  stats.daily[today].cost += usage.cost;
+
+  // Update totals
+  stats.totals.requests++;
+  stats.totals.tokens_in += usage.tokens_in;
+  stats.totals.tokens_out += usage.tokens_out;
+  stats.totals.cost += usage.cost;
+
+  // Calculate savings (vs using Opus for everything)
+  const opusCost = (usage.tokens_in * 0.015 + usage.tokens_out * 0.075) / 1000;
+  stats.totals.savings += Math.max(0, opusCost - usage.cost);
+
+  stats.lastUpdated = new Date().toISOString();
+  await env.MEMORY.put('model_stats', JSON.stringify(stats));
+}
+
+function dashboardPage(stats) {
+  const providers = stats.providers || {};
+  const models = stats.models || {};
+  const taskTypes = stats.task_types || {};
+  const daily = stats.daily || {};
+  const totals = stats.totals || { requests: 0, tokens_in: 0, tokens_out: 0, cost: 0, savings: 0 };
+
+  // Get last 7 days for chart
+  const last7Days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().split('T')[0];
+    last7Days.push({
+      date: key.slice(5), // MM-DD
+      requests: daily[key]?.requests || 0,
+      cost: daily[key]?.cost || 0,
+    });
+  }
+
+  const providerColors = {
+    anthropic: '#7c3aed',
+    openrouter: '#10b981',
+    z_ai: '#f59e0b',
+    gemini: '#3b82f6',
+    local: '#6b7280',
+  };
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Arni Dashboard - Model Usage Analytics</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg-primary: #0a0a0f;
+      --bg-secondary: #12121a;
+      --bg-card: rgba(255,255,255,0.03);
+      --border: rgba(255,255,255,0.08);
+      --text-primary: #f0f0f5;
+      --text-secondary: #888898;
+      --accent: #00ff88;
+      --accent-dim: rgba(0,255,136,0.1);
+      --purple: #7c3aed;
+      --green: #10b981;
+      --yellow: #f59e0b;
+      --blue: #3b82f6;
+      --red: #ef4444;
+    }
+    body {
+      font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+    .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+
+    /* Header */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .logo { display: flex; align-items: center; gap: 1rem; }
+    .logo h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      background: linear-gradient(135deg, var(--accent), #00ccff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .logo span { color: var(--text-secondary); font-size: 0.9rem; }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: var(--accent-dim);
+      border: 1px solid var(--accent);
+      padding: 0.5rem 1rem;
+      border-radius: 2rem;
+      font-size: 0.85rem;
+    }
+    .status-dot {
+      width: 8px; height: 8px;
+      background: var(--accent);
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.6;transform:scale(0.95)} }
+
+    /* Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    .stat-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 1rem;
+      padding: 1.5rem;
+      position: relative;
+      overflow: hidden;
+    }
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: var(--accent);
+    }
+    .stat-card.purple::before { background: var(--purple); }
+    .stat-card.green::before { background: var(--green); }
+    .stat-card.yellow::before { background: var(--yellow); }
+    .stat-card.blue::before { background: var(--blue); }
+    .stat-label { color: var(--text-secondary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+    .stat-value { font-size: 2rem; font-weight: 700; }
+    .stat-sub { color: var(--text-secondary); font-size: 0.85rem; margin-top: 0.25rem; }
+
+    /* Charts Section */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
+    .chart-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 1rem;
+      padding: 1.5rem;
+    }
+    .chart-card h3 {
+      font-size: 1rem;
+      margin-bottom: 1rem;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .chart-container { position: relative; height: 250px; }
+
+    /* Tables */
+    .tables-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .table-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 1rem;
+      padding: 1.5rem;
+    }
+    .table-card h3 {
+      font-size: 1rem;
+      margin-bottom: 1rem;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
+    th { color: var(--text-secondary); font-weight: 500; font-size: 0.8rem; text-transform: uppercase; }
+    td { font-size: 0.9rem; }
+    .provider-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.25rem 0.75rem;
+      border-radius: 1rem;
+      font-size: 0.8rem;
+      font-weight: 500;
+    }
+    .provider-badge.anthropic { background: rgba(124,58,237,0.2); color: #a78bfa; }
+    .provider-badge.openrouter { background: rgba(16,185,129,0.2); color: #34d399; }
+    .provider-badge.z_ai { background: rgba(245,158,11,0.2); color: #fbbf24; }
+    .provider-badge.gemini { background: rgba(59,130,246,0.2); color: #60a5fa; }
+    .provider-badge.local { background: rgba(107,114,128,0.2); color: #9ca3af; }
+    .cost { font-family: 'SF Mono', monospace; }
+    .cost.free { color: var(--green); }
+    .cost.low { color: var(--yellow); }
+    .cost.high { color: var(--red); }
+
+    /* Routing Config */
+    .config-section {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 1rem;
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .config-section h3 {
+      font-size: 1rem;
+      margin-bottom: 1rem;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .routing-tiers {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+    }
+    .tier {
+      background: var(--bg-secondary);
+      border-radius: 0.75rem;
+      padding: 1rem;
+      border-left: 3px solid var(--accent);
+    }
+    .tier.tier-1 { border-color: var(--green); }
+    .tier.tier-2 { border-color: var(--blue); }
+    .tier.tier-3 { border-color: var(--yellow); }
+    .tier.tier-4 { border-color: var(--purple); }
+    .tier-name { font-weight: 600; margin-bottom: 0.5rem; }
+    .tier-models { color: var(--text-secondary); font-size: 0.85rem; }
+    .tier-cost { font-family: 'SF Mono', monospace; font-size: 0.8rem; margin-top: 0.5rem; color: var(--accent); }
+
+    /* Footer */
+    footer {
+      text-align: center;
+      color: var(--text-secondary);
+      font-size: 0.8rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+
+    /* Savings highlight */
+    .savings-highlight {
+      background: linear-gradient(135deg, rgba(0,255,136,0.1), rgba(0,204,255,0.1));
+      border: 1px solid var(--accent);
+      border-radius: 1rem;
+      padding: 1.5rem;
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    .savings-highlight .big { font-size: 3rem; font-weight: 700; color: var(--accent); }
+    .savings-highlight .label { color: var(--text-secondary); margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo">
+        <h1>Arni Dashboard</h1>
+        <span>Model Usage Analytics</span>
+      </div>
+      <div class="status-badge">
+        <span class="status-dot"></span>
+        <span>Live</span>
+      </div>
+    </header>
+
+    <!-- Savings Highlight -->
+    <div class="savings-highlight">
+      <div class="big">$${totals.savings.toFixed(2)}</div>
+      <div class="label">Total Savings vs Pure Opus</div>
+    </div>
+
+    <!-- Stats Grid -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Total Requests</div>
+        <div class="stat-value">${totals.requests.toLocaleString()}</div>
+        <div class="stat-sub">All time</div>
+      </div>
+      <div class="stat-card purple">
+        <div class="stat-label">Tokens In</div>
+        <div class="stat-value">${formatTokens(totals.tokens_in)}</div>
+        <div class="stat-sub">Input tokens</div>
+      </div>
+      <div class="stat-card green">
+        <div class="stat-label">Tokens Out</div>
+        <div class="stat-value">${formatTokens(totals.tokens_out)}</div>
+        <div class="stat-sub">Output tokens</div>
+      </div>
+      <div class="stat-card yellow">
+        <div class="stat-label">Total Cost</div>
+        <div class="stat-value">$${totals.cost.toFixed(4)}</div>
+        <div class="stat-sub">Actual spend</div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="charts-grid">
+      <div class="chart-card">
+        <h3>Usage Over Time (7 Days)</h3>
+        <div class="chart-container">
+          <canvas id="usageChart"></canvas>
+        </div>
+      </div>
+      <div class="chart-card">
+        <h3>By Provider</h3>
+        <div class="chart-container">
+          <canvas id="providerChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Routing Config -->
+    <div class="config-section">
+      <h3>Active Routing Configuration</h3>
+      <div class="routing-tiers">
+        <div class="tier tier-1">
+          <div class="tier-name">🟢 Tier 1 - Simple</div>
+          <div class="tier-models">openrouter/free, gemini-2.5-flash:free</div>
+          <div class="tier-cost">FREE (1000 req/day)</div>
+        </div>
+        <div class="tier tier-2">
+          <div class="tier-name">🔵 Tier 2 - Coding</div>
+          <div class="tier-models">GLM-4.6 via Z.ai</div>
+          <div class="tier-cost">~$0.01/1k tokens</div>
+        </div>
+        <div class="tier tier-3">
+          <div class="tier-name">🟡 Tier 3 - Complex</div>
+          <div class="tier-models">GLM-4.7 via Z.ai</div>
+          <div class="tier-cost">~$0.01/1k tokens</div>
+        </div>
+        <div class="tier tier-4">
+          <div class="tier-name">🟣 Tier 4 - Critical</div>
+          <div class="tier-models">Claude Opus 4.6</div>
+          <div class="tier-cost">~$0.075/1k tokens</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tables -->
+    <div class="tables-grid">
+      <div class="table-card">
+        <h3>By Provider</h3>
+        <table>
+          <thead>
+            <tr><th>Provider</th><th>Requests</th><th>Tokens</th><th>Cost</th></tr>
+          </thead>
+          <tbody>
+            ${renderProviderRows(providers)}
+          </tbody>
+        </table>
+      </div>
+      <div class="table-card">
+        <h3>By Task Type</h3>
+        <table>
+          <thead>
+            <tr><th>Type</th><th>Requests</th><th>Cost</th></tr>
+          </thead>
+          <tbody>
+            ${renderTaskTypeRows(taskTypes)}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Top Models -->
+    <div class="table-card">
+      <h3>Top Models</h3>
+      <table>
+        <thead>
+          <tr><th>Model</th><th>Requests</th><th>Tokens In</th><th>Tokens Out</th><th>Cost</th></tr>
+        </thead>
+        <tbody>
+          ${renderModelRows(models)}
+        </tbody>
+      </table>
+    </div>
+
+    <footer>
+      <p>Arni v2.1.0 | <a href="/">API Docs</a> | Last updated: ${stats.lastUpdated || 'Never'}</p>
+    </footer>
+  </div>
+
+  <script>
+    // Usage Chart
+    const usageCtx = document.getElementById('usageChart').getContext('2d');
+    new Chart(usageCtx, {
+      type: 'line',
+      data: {
+        labels: ${JSON.stringify(last7Days.map(d => d.date))},
+        datasets: [{
+          label: 'Requests',
+          data: ${JSON.stringify(last7Days.map(d => d.requests))},
+          borderColor: '#00ff88',
+          backgroundColor: 'rgba(0,255,136,0.1)',
+          fill: true,
+          tension: 0.4,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#888' } },
+          x: { grid: { display: false }, ticks: { color: '#888' } }
+        }
+      }
+    });
+
+    // Provider Chart
+    const providerCtx = document.getElementById('providerChart').getContext('2d');
+    new Chart(providerCtx, {
+      type: 'doughnut',
+      data: {
+        labels: ${JSON.stringify(Object.keys(providers))},
+        datasets: [{
+          data: ${JSON.stringify(Object.values(providers).map(p => p.requests))},
+          backgroundColor: ['#7c3aed', '#10b981', '#f59e0b', '#3b82f6', '#6b7280'],
+          borderWidth: 0,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { color: '#888', padding: 15 } }
+        }
+      }
+    });
+  </script>
+</body>
+</html>`;
+}
+
+function formatTokens(num) {
+  if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+  if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+  return num.toString();
+}
+
+function renderProviderRows(providers) {
+  return Object.entries(providers).map(([name, data]) => {
+    const costClass = data.cost === 0 ? 'free' : data.cost < 0.01 ? 'low' : 'high';
+    const costText = data.cost === 0 ? 'FREE' : '$' + data.cost.toFixed(4);
+    const tokens = formatTokens(data.tokens_in + data.tokens_out);
+    return '<tr><td><span class="provider-badge ' + name + '">' + name + '</span></td><td>' + data.requests.toLocaleString() + '</td><td>' + tokens + '</td><td class="cost ' + costClass + '">' + costText + '</td></tr>';
+  }).join('');
+}
+
+function renderTaskTypeRows(taskTypes) {
+  return Object.entries(taskTypes).map(([type, data]) => {
+    const costText = data.cost === 0 ? 'FREE' : '$' + data.cost.toFixed(4);
+    return '<tr><td>' + type + '</td><td>' + data.requests.toLocaleString() + '</td><td class="cost">' + costText + '</td></tr>';
+  }).join('');
+}
+
+function renderModelRows(models) {
+  return Object.entries(models)
+    .sort((a, b) => b[1].requests - a[1].requests)
+    .slice(0, 10)
+    .map(([model, data]) => {
+      const costClass = data.cost === 0 ? 'free' : data.cost < 0.01 ? 'low' : 'high';
+      const costText = data.cost === 0 ? 'FREE' : '$' + data.cost.toFixed(4);
+      return '<tr><td><code>' + model + '</code></td><td>' + data.requests.toLocaleString() + '</td><td>' + formatTokens(data.tokens_in) + '</td><td>' + formatTokens(data.tokens_out) + '</td><td class="cost ' + costClass + '">' + costText + '</td></tr>';
+    }).join('');
 }
 
 function statusPage() {
@@ -442,6 +1042,12 @@ function statusPage() {
     <p class="subtitle">Autonomous Agent Platform</p>
     <div class="status"><span class="dot"></span><span>Online</span></div>
 
+    <div class="section" style="background: linear-gradient(135deg, rgba(0,255,136,0.1), rgba(0,204,255,0.05)); border: 1px solid #00ff88;">
+      <h2>📊 Dashboard</h2>
+      <p style="margin-bottom: 1rem; color: #ccc;">Visual analytics for model usage, costs, and savings</p>
+      <a href="/dashboard" style="display: inline-block; background: #00ff88; color: #000; padding: 0.75rem 1.5rem; border-radius: 0.5rem; text-decoration: none; font-weight: bold;">Open Dashboard →</a>
+    </div>
+
     <div class="section">
       <h2>Status</h2>
       <div class="endpoint"><span class="method">GET</span><span class="path">/health</span><span class="desc">Health check + stats</span></div>
@@ -487,7 +1093,7 @@ function statusPage() {
       <div class="endpoint"><span class="method post">POST</span><span class="path">/proxy</span><span class="desc">HTTP proxy</span></div>
     </div>
 
-    <p class="footer">v2.0.0 | Cloudflare Workers + KV | Cron enabled</p>
+    <p class="footer">v2.1.0 | Cloudflare Workers + KV | <a href="/dashboard" style="color:#00ff88">Dashboard</a></p>
   </div>
 </body>
 </html>`;
