@@ -771,11 +771,28 @@ function dashboardPage(stats) {
       </div>
     </header>
 
-    <!-- Monthly Cost Summary -->
+    <!-- Monthly Subscriptions Summary -->
     <div class="savings-highlight">
       <div class="big">$103/mo</div>
-      <div class="label">Total Fixed Cost (Max $100 + GLM $3)</div>
-      <div style="margin-top:1rem;font-size:0.9rem;color:var(--text-secondary);">OpenRouter FREE • Local embeddings FREE</div>
+      <div class="label">Total Monthly Subscriptions</div>
+      <div style="margin-top:1rem;display:flex;justify-content:center;gap:2rem;flex-wrap:wrap;">
+        <div style="text-align:center;">
+          <div style="font-size:1.5rem;color:#a78bfa;">$100</div>
+          <div style="font-size:0.75rem;color:var(--text-secondary);">Claude Max</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:1.5rem;color:#fbbf24;">$3</div>
+          <div style="font-size:0.75rem;color:var(--text-secondary);">Z.ai GLM</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:1.5rem;color:#34d399;">FREE</div>
+          <div style="font-size:0.75rem;color:var(--text-secondary);">Gemini</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:1.5rem;color:#34d399;">FREE</div>
+          <div style="font-size:0.75rem;color:var(--text-secondary);">OpenRouter</div>
+        </div>
+      </div>
     </div>
 
     <!-- Stats Grid -->
@@ -831,23 +848,24 @@ function dashboardPage(stats) {
       <div class="routing-tiers">
         <div class="tier tier-1">
           <div class="tier-name">🟢 Tier 1 - Simple</div>
-          <div class="tier-models">openrouter/free, gemini-2.5-flash:free</div>
-          <div class="tier-cost">FREE (1000 req/day)</div>
+          <div class="tier-models">OpenRouter free, Gemini Flash</div>
+          <div class="tier-cost" style="color:#34d399;">FREE</div>
         </div>
         <div class="tier tier-2">
           <div class="tier-name">🔵 Tier 2 - Coding</div>
           <div class="tier-models">GLM-4.6 via Z.ai</div>
-          <div class="tier-cost">$3/mo subscription</div>
+          <div class="tier-cost" style="color:#fbbf24;">$3/mo subscription</div>
         </div>
         <div class="tier tier-3">
           <div class="tier-name">🟡 Tier 3 - Complex</div>
-          <div class="tier-models">GLM-4.7 via Z.ai</div>
-          <div class="tier-cost">$3/mo subscription</div>
+          <div class="tier-models">GLM-4.7 via Z.ai, Gemini Pro</div>
+          <div class="tier-cost" style="color:#fbbf24;">$3/mo + Gemini free</div>
         </div>
         <div class="tier tier-4">
           <div class="tier-name">🟣 Tier 4 - Critical/Strategic</div>
-          <div class="tier-models">Claude Opus 4.6 (Max $100/mo)</div>
-          <div class="tier-cost">Business planning, architecture, security, agent orchestration, swarm/team management</div>
+          <div class="tier-models">Claude Opus 4.6</div>
+          <div class="tier-cost" style="color:#a78bfa;">$100/mo subscription</div>
+          <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.5rem;">Business planning • Architecture • Security • Agent orchestration</div>
         </div>
       </div>
     </div>
@@ -955,23 +973,18 @@ function formatTokens(num) {
 }
 
 function renderProviderRows(providers) {
+  const costInfo = {
+    anthropic: { text: '$100/mo', type: 'subscription', class: 'high' },
+    z_ai: { text: '$3/mo', type: 'subscription', class: 'low' },
+    gemini: { text: 'FREE', type: 'free tier', class: 'free' },
+    openrouter: { text: 'FREE', type: 'free models', class: 'free' },
+    local: { text: 'FREE', type: 'local', class: 'free' },
+  };
   return Object.entries(providers).map(([name, data]) => {
-    let costText, costClass;
-    if (name === 'anthropic') {
-      costText = 'Max $100/mo';
-      costClass = 'high';
-    } else if (name === 'z_ai') {
-      costText = '$3/mo';
-      costClass = 'low';
-    } else if (name === 'openrouter' || name === 'local') {
-      costText = 'FREE';
-      costClass = 'free';
-    } else {
-      costText = data.cost === 0 ? 'FREE' : '$' + data.cost.toFixed(4);
-      costClass = data.cost === 0 ? 'free' : data.cost < 0.01 ? 'low' : 'high';
-    }
+    const info = costInfo[name] || { text: 'Unknown', type: '', class: '' };
     const tokens = formatTokens(data.tokens_in + data.tokens_out);
-    return '<tr><td><span class="provider-badge ' + name + '">' + name + '</span></td><td>' + data.requests.toLocaleString() + '</td><td>' + tokens + '</td><td class="cost ' + costClass + '">' + costText + '</td></tr>';
+    const typeLabel = info.type ? '<span style="font-size:0.7rem;color:var(--text-secondary);display:block;">' + info.type + '</span>' : '';
+    return '<tr><td><span class="provider-badge ' + name + '">' + name + '</span></td><td>' + data.requests.toLocaleString() + '</td><td>' + tokens + '</td><td class="cost ' + info.class + '">' + info.text + typeLabel + '</td></tr>';
   }).join('');
 }
 
