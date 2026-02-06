@@ -710,6 +710,10 @@ async function updateModelStats(env, usage) {
 function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
   const providers = stats.providers || {};
   const totals = stats.totals || { requests: 0, tokens_in: 0, tokens_out: 0 };
+  const taskTypes = stats.task_types || {};
+  const models = stats.models || {};
+  const modelTaskMatrix = stats.model_task_matrix || {};
+  const daily = stats.daily || {};
 
   // Claude Max usage
   const maxTokensUsed = maxUsage.tokensUsed || 0;
@@ -730,6 +734,95 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
   // Status colors
   const statusColor = maxPercentUsed >= 100 ? '#ef4444' : maxPercentUsed > 80 ? '#f59e0b' : '#10b981';
   const weeklyColor = weeklyPercent > 80 ? '#ef4444' : weeklyPercent > 50 ? '#f59e0b' : '#10b981';
+
+  // Task type definitions with colors
+  const taskDefs = {
+    orchestration: { icon: '🎯', color: '#a78bfa', desc: 'Coordination & delegation' },
+    planning: { icon: '📋', color: '#818cf8', desc: 'Architecture & design' },
+    security: { icon: '🔒', color: '#f43f5e', desc: 'Audits & reviews' },
+    coding: { icon: '💻', color: '#f59e0b', desc: 'Implementation' },
+    testing: { icon: '🧪', color: '#10b981', desc: 'Tests & validation' },
+    refactoring: { icon: '🔧', color: '#06b6d4', desc: 'Code improvement' },
+    research: { icon: '🔍', color: '#8b5cf6', desc: 'Investigation' },
+    documentation: { icon: '📝', color: '#64748b', desc: 'Docs & comments' },
+    general: { icon: '⚡', color: '#888', desc: 'General tasks' }
+  };
+
+  // Build task type stats HTML
+  const taskTypeEntries = Object.entries(taskTypes).sort((a,b) => b[1].requests - a[1].requests);
+  const maxTaskReqs = Math.max(...taskTypeEntries.map(([,v]) => v.requests), 1);
+  const taskTypesHTML = taskTypeEntries.length ? taskTypeEntries.map(([type, data]) => {
+    const def = taskDefs[type] || taskDefs.general;
+    const pct = (data.requests / maxTaskReqs * 100).toFixed(0);
+    return `<div class="task-row">
+      <div class="task-label"><span>${def.icon}</span> ${type}</div>
+      <div class="task-bar-wrap">
+        <div class="task-bar" style="width:${pct}%;background:${def.color};"></div>
+      </div>
+      <div class="task-stats">${data.requests} <span class="dim">(${formatTokens(data.tokens_in + data.tokens_out)})</span></div>
+    </div>`;
+  }).join('') : '<div class="dim" style="text-align:center;padding:1rem;">No task data yet</div>';
+
+  // Build model stats HTML
+  const modelEntries = Object.entries(models).sort((a,b) => b[1].requests - a[1].requests);
+  const maxModelReqs = Math.max(...modelEntries.map(([,v]) => v.requests), 1);
+  const modelColors = {
+    'opus': '#a78bfa', 'sonnet': '#818cf8', 'haiku': '#06b6d4',
+    'glm': '#f59e0b', 'gemini': '#10b981', 'gpt': '#ef4444'
+  };
+  const getModelColor = (name) => {
+    const n = name.toLowerCase();
+    for (const [k, c] of Object.entries(modelColors)) {
+      if (n.includes(k)) return c;
+    }
+    return '#888';
+  };
+  const modelsHTML = modelEntries.length ? modelEntries.slice(0, 8).map(([model, data]) => {
+    const shortName = model.split('/').pop().replace('claude-', '').slice(0, 20);
+    const pct = (data.requests / maxModelReqs * 100).toFixed(0);
+    const color = getModelColor(model);
+    return `<div class="task-row">
+      <div class="task-label" style="color:${color};">${shortName}</div>
+      <div class="task-bar-wrap">
+        <div class="task-bar" style="width:${pct}%;background:${color};"></div>
+      </div>
+      <div class="task-stats">${data.requests}</div>
+    </div>`;
+  }).join('') : '<div class="dim" style="text-align:center;padding:1rem;">No model data yet</div>';
+
+  // Build Model→Task matrix (heatmap)
+  const matrixModels = Object.keys(modelTaskMatrix).slice(0, 5);
+  const allTasks = [...new Set(Object.values(modelTaskMatrix).flatMap(t => Object.keys(t)))];
+  const matrixMax = Math.max(...Object.values(modelTaskMatrix).flatMap(t => Object.values(t)), 1);
+  const heatmapHTML = matrixModels.length && allTasks.length ? `
+    <table class="heatmap">
+      <thead><tr><th></th>${allTasks.map(t => `<th>${(taskDefs[t]?.icon || '⚡')}</th>`).join('')}</tr></thead>
+      <tbody>
+        ${matrixModels.map(model => {
+          const shortName = model.split('/').pop().replace('claude-', '').slice(0, 12);
+          return `<tr><td class="model-name">${shortName}</td>${allTasks.map(task => {
+            const count = modelTaskMatrix[model]?.[task] || 0;
+            const intensity = count / matrixMax;
+            const bg = count > 0 ? `rgba(167,139,250,${0.2 + intensity * 0.8})` : 'transparent';
+            return `<td style="background:${bg};" title="${model} → ${task}: ${count}">${count || ''}</td>`;
+          }).join('')}</tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  ` : '<div class="dim" style="text-align:center;padding:1rem;">No matrix data yet</div>';
+
+  // Daily activity (last 7 days)
+  const days = Object.keys(daily).sort().slice(-7);
+  const maxDailyReqs = Math.max(...days.map(d => daily[d]?.requests || 0), 1);
+  const dailyHTML = days.length ? days.map(day => {
+    const d = daily[day];
+    const height = (d.requests / maxDailyReqs * 60).toFixed(0);
+    const label = day.slice(5); // MM-DD
+    return `<div class="daily-bar-wrap">
+      <div class="daily-bar" style="height:${height}px;background:linear-gradient(to top, #a78bfa, #818cf8);"></div>
+      <div class="daily-label">${label}</div>
+    </div>`;
+  }).join('') : '<div class="dim">No daily data</div>';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -776,6 +869,26 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
 
     .btn { padding: 0.5rem 1rem; border: 1px solid rgba(255,255,255,0.2); background: transparent; color: #a78bfa; border-radius: 0.5rem; cursor: pointer; font-size: 0.8rem; }
     .btn:hover { background: rgba(167,139,250,0.1); }
+
+    /* Task types & models */
+    .task-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0; }
+    .task-label { min-width: 100px; font-size: 0.8rem; display: flex; align-items: center; gap: 0.3rem; }
+    .task-bar-wrap { flex: 1; height: 8px; background: rgba(255,255,255,0.05); border-radius: 4px; overflow: hidden; }
+    .task-bar { height: 100%; border-radius: 4px; transition: width 0.3s; }
+    .task-stats { min-width: 80px; text-align: right; font-size: 0.75rem; color: #aaa; }
+    .dim { color: #666; }
+
+    /* Heatmap */
+    .heatmap { width: 100%; border-collapse: collapse; font-size: 0.7rem; }
+    .heatmap th, .heatmap td { padding: 0.3rem; text-align: center; border: 1px solid rgba(255,255,255,0.05); }
+    .heatmap th { color: #888; font-weight: normal; }
+    .heatmap .model-name { text-align: left; color: #a78bfa; font-weight: 500; max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+
+    /* Daily chart */
+    .daily-chart { display: flex; align-items: flex-end; gap: 0.5rem; height: 80px; padding-top: 1rem; }
+    .daily-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; }
+    .daily-bar { width: 100%; max-width: 30px; border-radius: 3px 3px 0 0; transition: height 0.3s; }
+    .daily-label { font-size: 0.65rem; color: #666; margin-top: 0.3rem; }
 
     footer { text-align: center; padding: 1rem 0; color: #666; font-size: 0.75rem; border-top: 1px solid rgba(255,255,255,0.05); margin-top: 1.5rem; }
   </style>
@@ -874,6 +987,30 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
           <div><div style="font-size:1.3rem;font-weight:600;">${formatTokens(totals.tokens_out)}</div><div class="sub">Tokens Out</div></div>
         </div>
       </div>
+    </div>
+
+    <!-- TASK TYPES & MODELS -->
+    <div class="grid grid-2" style="margin-top:1rem;">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:0.75rem;">📊 Task Types</div>
+        ${taskTypesHTML}
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:0.75rem;">🤖 Models Used</div>
+        ${modelsHTML}
+      </div>
+    </div>
+
+    <!-- MODEL→TASK MATRIX (HEATMAP) -->
+    <div class="card" style="margin-top:1rem;">
+      <div class="card-title" style="margin-bottom:0.75rem;">🔥 Model → Task Matrix</div>
+      ${heatmapHTML}
+    </div>
+
+    <!-- DAILY ACTIVITY -->
+    <div class="card" style="margin-top:1rem;">
+      <div class="card-title" style="margin-bottom:0;">📈 Daily Activity (Last 7 Days)</div>
+      <div class="daily-chart">${dailyHTML}</div>
     </div>
 
     <!-- CLOUDFLARE -->
