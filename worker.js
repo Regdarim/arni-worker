@@ -771,10 +771,11 @@ function dashboardPage(stats) {
       </div>
     </header>
 
-    <!-- Savings Highlight -->
+    <!-- Monthly Cost Summary -->
     <div class="savings-highlight">
-      <div class="big">$${totals.savings.toFixed(2)}</div>
-      <div class="label">Total Savings vs Pure Opus</div>
+      <div class="big">$103/mo</div>
+      <div class="label">Total Fixed Cost (Max $100 + GLM $3)</div>
+      <div style="margin-top:1rem;font-size:0.9rem;color:var(--text-secondary);">OpenRouter FREE • Local embeddings FREE</div>
     </div>
 
     <!-- Stats Grid -->
@@ -836,16 +837,16 @@ function dashboardPage(stats) {
         <div class="tier tier-2">
           <div class="tier-name">🔵 Tier 2 - Coding</div>
           <div class="tier-models">GLM-4.6 via Z.ai</div>
-          <div class="tier-cost">~$0.01/1k tokens</div>
+          <div class="tier-cost">$3/mo subscription</div>
         </div>
         <div class="tier tier-3">
           <div class="tier-name">🟡 Tier 3 - Complex</div>
           <div class="tier-models">GLM-4.7 via Z.ai</div>
-          <div class="tier-cost">~$0.01/1k tokens</div>
+          <div class="tier-cost">$3/mo subscription</div>
         </div>
         <div class="tier tier-4">
           <div class="tier-name">🟣 Tier 4 - Critical/Strategic</div>
-          <div class="tier-models">Claude Opus 4.6 (Max subscription)</div>
+          <div class="tier-models">Claude Opus 4.6 (Max $100/mo)</div>
           <div class="tier-cost">Business planning, architecture, high-level strategy</div>
         </div>
       </div>
@@ -955,8 +956,20 @@ function formatTokens(num) {
 
 function renderProviderRows(providers) {
   return Object.entries(providers).map(([name, data]) => {
-    const costClass = data.cost === 0 ? 'free' : data.cost < 0.01 ? 'low' : 'high';
-    const costText = data.cost === 0 ? 'FREE' : '$' + data.cost.toFixed(4);
+    let costText, costClass;
+    if (name === 'anthropic') {
+      costText = 'Max $100/mo';
+      costClass = 'high';
+    } else if (name === 'z_ai') {
+      costText = '$3/mo';
+      costClass = 'low';
+    } else if (name === 'openrouter' || name === 'local') {
+      costText = 'FREE';
+      costClass = 'free';
+    } else {
+      costText = data.cost === 0 ? 'FREE' : '$' + data.cost.toFixed(4);
+      costClass = data.cost === 0 ? 'free' : data.cost < 0.01 ? 'low' : 'high';
+    }
     const tokens = formatTokens(data.tokens_in + data.tokens_out);
     return '<tr><td><span class="provider-badge ' + name + '">' + name + '</span></td><td>' + data.requests.toLocaleString() + '</td><td>' + tokens + '</td><td class="cost ' + costClass + '">' + costText + '</td></tr>';
   }).join('');
