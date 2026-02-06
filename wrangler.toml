@@ -1,5 +1,5 @@
 name = "arni-webhook"
-main = "worker.js"
+main = "src/index.js"
 compatibility_date = "2024-12-30"
 
 kv_namespaces = [
@@ -11,3 +11,25 @@ crons = ["0 * * * *"]
 
 [vars]
 ENVIRONMENT = "production"
+VERSION = "4.0.0"
+
+# TTLs (seconds)
+WEBHOOK_TTL = "2592000"    # 30 days
+USAGE_TTL = "7776000"      # 90 days
+LOG_TTL = "604800"         # 7 days
+CF_USAGE_TTL = "604800"    # 7 days
+
+# Claude Max limits
+MAX_TOKENS_LIMIT = "88000"
+WEEKLY_TOKENS_LIMIT = "400000"
+WINDOW_DURATION_MS = "18000000"  # 5 hours
+
+# Opus cost per 1K tokens (for savings calculation)
+OPUS_COST_IN = "0.015"
+OPUS_COST_OUT = "0.075"
+
+# List limits
+DEFAULT_LIST_LIMIT = "100"
+WEBHOOK_LIST_LIMIT = "50"
+
+# API_KEY should be set as a secret via: wrangler secret put API_KEY
