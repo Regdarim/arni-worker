@@ -527,18 +527,39 @@ function getDefaultMaxUsage() {
 async function updateClaudeMaxUsage(env, tokensIn, tokensOut) {
   if (!env.MEMORY) return;
   const key = 'claude_max_usage';
-  const usage = await getClaudeMaxUsage(env);
+
+  // Read raw data to preserve windowStart
+  const raw = await env.MEMORY.get(key);
+  let usage;
+
+  if (raw) {
+    usage = JSON.parse(raw);
+    const now = Date.now();
+    const windowDuration = 5 * 60 * 60 * 1000;
+
+    // Check if window expired
+    if (now - usage.windowStart > windowDuration) {
+      usage = getDefaultMaxUsage();
+    }
+  } else {
+    usage = getDefaultMaxUsage();
+  }
 
   // Add tokens
   usage.tokensUsed += (tokensIn + tokensOut);
   usage.sessions++;
   usage.lastSession = new Date().toISOString();
 
-  // Don't overwrite calculated fields
-  delete usage.timeRemainingMs;
-  delete usage.timeRemainingHours;
+  // Store (without calculated fields)
+  const toStore = {
+    tokensUsed: usage.tokensUsed,
+    tokensLimit: usage.tokensLimit,
+    windowStart: usage.windowStart,
+    sessions: usage.sessions,
+    lastSession: usage.lastSession
+  };
 
-  await env.MEMORY.put(key, JSON.stringify(usage));
+  await env.MEMORY.put(key, JSON.stringify(toStore));
 }
 
 async function getModelStats(env) {
