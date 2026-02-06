@@ -708,235 +708,189 @@ async function updateModelStats(env, usage) {
 }
 
 function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
-  const providers = stats.providers || {};
   const totals = stats.totals || { requests: 0, tokens_in: 0, tokens_out: 0 };
 
-  // Claude Max usage
-  const maxTokensUsed = maxUsage.tokensUsed || 0;
-  const maxTokensLimit = maxUsage.tokensLimit || 88000;
-  const maxTimeRemaining = maxUsage.timeRemainingHours || '5.0';
-  const maxSessions = maxUsage.sessions || 0;
-  const maxPercentUsed = Math.min((maxTokensUsed / maxTokensLimit) * 100, 100);
-  const maxTokensRemaining = Math.max(maxTokensLimit - maxTokensUsed, 0);
-  const maxLastSession = maxUsage.lastSession ? new Date(maxUsage.lastSession).toLocaleTimeString() : '-';
+  // Session (5h window)
+  const sessionPercent = Math.min(((maxUsage.tokensUsed || 0) / (maxUsage.tokensLimit || 88000)) * 100, 100);
+  const sessionTimeLeft = maxUsage.timeRemainingHours || '5.0';
 
-  // Weekly limits
+  // Weekly
   const weeklyUsed = maxUsage.weeklyTokensUsed || 0;
   const weeklyLimit = maxUsage.weeklyTokensLimit || 400000;
   const weeklyPercent = Math.min((weeklyUsed / weeklyLimit) * 100, 100);
-  const weeklyRemaining = Math.max(weeklyLimit - weeklyUsed, 0);
   const daysUntilReset = maxUsage.daysUntilWeekReset || 7;
 
-  // Status colors
-  const statusColor = maxPercentUsed >= 100 ? '#ef4444' : maxPercentUsed > 80 ? '#f59e0b' : '#10b981';
-  const weeklyColor = weeklyPercent > 80 ? '#ef4444' : weeklyPercent > 50 ? '#f59e0b' : '#10b981';
+  // Circle progress calculation
+  const circleSize = 140;
+  const strokeWidth = 10;
+  const radius = (circleSize - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const sessionOffset = circumference - (sessionPercent / 100) * circumference;
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Opus 4.6 Control Panel</title>
+  <title>Usage - Opus 4.6</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, system-ui, sans-serif; background: #0a0a0f; color: #f0f0f5; }
-    .container { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
-    .header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 0; border-bottom: 1px solid rgba(255,255,255,0.1); margin-bottom: 1.5rem; }
-    .header h1 { font-size: 1.3rem; color: #a78bfa; }
-    .status { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
-    .dot { width: 8px; height: 8px; border-radius: 50%; animation: pulse 2s infinite; }
-    @keyframes pulse { 50% { opacity: 0.5; } }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8f9fa; color: #1a1a1a; }
+    .container { max-width: 600px; margin: 0 auto; padding: 2rem 1.5rem; }
 
-    .grid { display: grid; gap: 1rem; margin-bottom: 1.5rem; }
-    .grid-2 { grid-template-columns: 1fr 1fr; }
-    .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
-    @media (max-width: 768px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+    h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; }
 
-    .card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 0.75rem; padding: 1rem; }
-    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; }
-    .card-title { font-size: 0.8rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+    .section { background: #fff; border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .section-title { font-size: 0.9rem; font-weight: 600; color: #666; margin-bottom: 1rem; }
 
-    .big-num { font-size: 2rem; font-weight: 700; }
-    .sub { font-size: 0.8rem; color: #888; margin-top: 0.25rem; }
+    /* Circular progress */
+    .session-circle { display: flex; align-items: center; gap: 2rem; }
+    .circle-wrapper { position: relative; width: ${circleSize}px; height: ${circleSize}px; }
+    .circle-svg { transform: rotate(-90deg); }
+    .circle-bg { fill: none; stroke: #e5e5e5; stroke-width: ${strokeWidth}; }
+    .circle-progress { fill: none; stroke: #7c3aed; stroke-width: ${strokeWidth}; stroke-linecap: round; transition: stroke-dashoffset 0.5s; }
+    .circle-text { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .circle-percent { font-size: 2rem; font-weight: 700; color: #1a1a1a; }
+    .circle-label { font-size: 0.75rem; color: #888; }
 
-    .progress { height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; margin: 0.5rem 0; }
-    .progress-bar { height: 100%; transition: width 0.3s; }
+    .session-info { flex: 1; }
+    .session-status { font-size: 1rem; font-weight: 500; margin-bottom: 0.5rem; }
+    .session-reset { font-size: 0.85rem; color: #666; }
 
-    .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 500; }
+    /* Weekly bars */
+    .weekly-item { margin-bottom: 1rem; }
+    .weekly-item:last-child { margin-bottom: 0; }
+    .weekly-header { display: flex; justify-content: space-between; margin-bottom: 0.5rem; }
+    .weekly-label { font-size: 0.9rem; font-weight: 500; }
+    .weekly-value { font-size: 0.9rem; color: #666; }
+    .bar { height: 8px; background: #e5e5e5; border-radius: 4px; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+    .bar-purple { background: #7c3aed; }
+    .bar-orange { background: #f59e0b; }
+    .bar-green { background: #10b981; }
 
-    .tier { padding: 0.75rem; background: #12121a; border-radius: 0.5rem; border-left: 3px solid; }
-    .tier-purple { border-color: #a78bfa; }
-    .tier-yellow { border-color: #f59e0b; }
+    /* Activity */
+    .activity-list { font-size: 0.85rem; }
+    .activity-item { display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #f0f0f0; }
+    .activity-item:last-child { border-bottom: none; }
+    .activity-model { font-weight: 500; }
+    .activity-tokens { color: #666; }
+
+    /* Routing */
+    .tier-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; }
+    .tier { padding: 0.75rem; background: #f8f9fa; border-radius: 8px; border-left: 3px solid; }
+    .tier-purple { border-color: #7c3aed; }
+    .tier-orange { border-color: #f59e0b; }
     .tier-green { border-color: #10b981; }
-    .tier-name { font-weight: 600; font-size: 0.9rem; }
-    .tier-desc { font-size: 0.75rem; color: #888; margin-top: 0.25rem; }
+    .tier-name { font-weight: 600; font-size: 0.85rem; margin-bottom: 0.25rem; }
+    .tier-desc { font-size: 0.7rem; color: #666; }
 
-    #liveFeed { max-height: 150px; overflow-y: auto; font-size: 0.8rem; }
-    .feed-item { padding: 0.4rem 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; }
+    /* Footer */
+    .footer { text-align: center; font-size: 0.75rem; color: #999; margin-top: 1rem; }
 
-    .btn { padding: 0.5rem 1rem; border: 1px solid rgba(255,255,255,0.2); background: transparent; color: #a78bfa; border-radius: 0.5rem; cursor: pointer; font-size: 0.8rem; }
-    .btn:hover { background: rgba(167,139,250,0.1); }
-
-    footer { text-align: center; padding: 1rem 0; color: #666; font-size: 0.75rem; border-top: 1px solid rgba(255,255,255,0.05); margin-top: 1.5rem; }
+    @media (max-width: 500px) {
+      .session-circle { flex-direction: column; text-align: center; }
+      .tier-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="header">
-      <h1>🟣 Opus 4.6 Control Panel</h1>
-      <div class="status">
-        <span class="dot" style="background:${statusColor}"></span>
-        <span>${maxPercentUsed >= 100 ? 'LIMIT REACHED' : maxPercentUsed > 80 ? 'Near Limit' : 'Available'}</span>
+    <h1>Usage</h1>
+
+    <!-- Current Session -->
+    <div class="section">
+      <div class="section-title">Current session</div>
+      <div class="session-circle">
+        <div class="circle-wrapper">
+          <svg class="circle-svg" width="${circleSize}" height="${circleSize}">
+            <circle class="circle-bg" cx="${circleSize/2}" cy="${circleSize/2}" r="${radius}"/>
+            <circle class="circle-progress" cx="${circleSize/2}" cy="${circleSize/2}" r="${radius}"
+              stroke-dasharray="${circumference}" stroke-dashoffset="${sessionOffset}"
+              style="stroke: ${sessionPercent >= 100 ? '#ef4444' : sessionPercent > 80 ? '#f59e0b' : '#7c3aed'}"/>
+          </svg>
+          <div class="circle-text">
+            <span class="circle-percent">${sessionPercent.toFixed(0)}%</span>
+            <span class="circle-label">used</span>
+          </div>
+        </div>
+        <div class="session-info">
+          <div class="session-status">${sessionPercent >= 100 ? 'Limit reached' : sessionPercent > 80 ? 'Near limit' : 'Available'}</div>
+          <div class="session-reset">Resets in ${sessionTimeLeft}h</div>
+        </div>
       </div>
     </div>
 
-    <!-- MY LIMITS -->
-    <div class="grid grid-3">
-      <div class="card" style="border-color:${statusColor}40;">
-        <div class="card-header">
-          <span class="card-title">⏱️ 5h Window</span>
-          <span style="color:${statusColor};font-size:0.85rem;font-weight:600;">${maxPercentUsed.toFixed(0)}%</span>
+    <!-- Weekly Limits -->
+    <div class="section">
+      <div class="section-title">Weekly limits</div>
+
+      <div class="weekly-item">
+        <div class="weekly-header">
+          <span class="weekly-label">All models (Opus)</span>
+          <span class="weekly-value">${weeklyPercent.toFixed(0)}% used</span>
         </div>
-        <div class="big-num" style="color:${statusColor};">${formatTokens(maxTokensUsed)}</div>
-        <div class="sub">of ${formatTokens(maxTokensLimit)} tokens</div>
-        <div class="progress"><div class="progress-bar" style="width:${Math.min(maxPercentUsed,100)}%;background:${statusColor};"></div></div>
-        <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#888;">
-          <span>${formatTokens(maxTokensRemaining)} left</span>
-          <span>resets in ${maxTimeRemaining}h</span>
-        </div>
+        <div class="bar"><div class="bar-fill bar-purple" style="width:${weeklyPercent}%"></div></div>
       </div>
 
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">📅 Weekly</span>
-          <span style="color:${weeklyColor};font-size:0.85rem;font-weight:600;">${weeklyPercent.toFixed(0)}%</span>
+      <div class="weekly-item">
+        <div class="weekly-header">
+          <span class="weekly-label">Delegated (Z.ai)</span>
+          <span class="weekly-value">${formatTokens(totals.tokens_in + totals.tokens_out)} tokens</span>
         </div>
-        <div class="big-num" style="color:${weeklyColor};">${formatTokens(weeklyUsed)}</div>
-        <div class="sub">of ${formatTokens(weeklyLimit)} tokens</div>
-        <div class="progress"><div class="progress-bar" style="width:${Math.min(weeklyPercent,100)}%;background:${weeklyColor};"></div></div>
-        <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#888;">
-          <span>${formatTokens(weeklyRemaining)} left</span>
-          <span>Mon reset (${daysUntilReset}d)</span>
-        </div>
+        <div class="bar"><div class="bar-fill bar-orange" style="width:${Math.min((totals.requests / 100) * 100, 100)}%"></div></div>
       </div>
 
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">📡 Live Activity</span>
-          <span class="dot" style="background:#10b981;width:6px;height:6px;"></span>
-        </div>
-        <div id="liveFeed"><div style="color:#888;text-align:center;padding:1rem;">Loading...</div></div>
-        <button class="btn" onclick="showLog()" style="width:100%;margin-top:0.5rem;">Full Log →</button>
+      <div style="font-size:0.75rem;color:#888;margin-top:0.75rem;">Resets Monday (${daysUntilReset} days)</div>
+    </div>
+
+    <!-- Live Activity -->
+    <div class="section">
+      <div class="section-title">Recent activity</div>
+      <div id="activityList" class="activity-list">
+        <div style="color:#888;text-align:center;padding:1rem;">Loading...</div>
       </div>
     </div>
 
-    <!-- ROUTING RULES -->
-    <div class="card" style="margin-bottom:1rem;">
-      <div class="card-title" style="margin-bottom:1rem;">🧠 Routing Rules (I am the orchestrator)</div>
-      <div class="grid grid-3" style="gap:0.75rem;">
+    <!-- Routing -->
+    <div class="section">
+      <div class="section-title">Model routing</div>
+      <div class="tier-grid">
         <div class="tier tier-purple">
-          <div class="tier-name">Opus 4.6 (ME)</div>
-          <div class="tier-desc">Architecture • Security • Planning • Orchestration</div>
-          <div style="font-size:0.7rem;color:#a78bfa;margin-top:0.25rem;">$100/mo Max</div>
+          <div class="tier-name">Opus 4.6</div>
+          <div class="tier-desc">Planning, Security</div>
         </div>
-        <div class="tier tier-yellow">
+        <div class="tier tier-orange">
           <div class="tier-name">Z.ai GLM</div>
-          <div class="tier-desc">Coding • Tests • Refactoring • Bulk</div>
-          <div style="font-size:0.7rem;color:#f59e0b;margin-top:0.25rem;">$3/mo (delegate here)</div>
+          <div class="tier-desc">Coding, Tests</div>
         </div>
         <div class="tier tier-green">
-          <div class="tier-name">Free Models</div>
-          <div class="tier-desc">Simple • Formatting • Translation</div>
-          <div style="font-size:0.7rem;color:#10b981;margin-top:0.25rem;">OpenRouter / Gemini</div>
+          <div class="tier-name">Free</div>
+          <div class="tier-desc">Simple tasks</div>
         </div>
       </div>
     </div>
 
-    <!-- COSTS & STATS -->
-    <div class="grid grid-2">
-      <div class="card">
-        <div class="card-title" style="margin-bottom:0.75rem;">💰 Monthly Cost</div>
-        <div style="display:flex;gap:1.5rem;">
-          <div><div style="font-size:1.5rem;font-weight:700;color:#a78bfa;">$100</div><div class="sub">Claude Max</div></div>
-          <div><div style="font-size:1.5rem;font-weight:700;color:#f59e0b;">$3</div><div class="sub">Z.ai GLM</div></div>
-          <div><div style="font-size:1.5rem;font-weight:700;color:#10b981;">FREE</div><div class="sub">Gemini/OR</div></div>
-        </div>
-        <div style="margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid rgba(255,255,255,0.05);font-size:0.85rem;">
-          Total: <strong>$103/mo</strong>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-title" style="margin-bottom:0.75rem;">📊 All-Time Stats</div>
-        <div style="display:flex;gap:1.5rem;">
-          <div><div style="font-size:1.3rem;font-weight:600;">${totals.requests.toLocaleString()}</div><div class="sub">Requests</div></div>
-          <div><div style="font-size:1.3rem;font-weight:600;">${formatTokens(totals.tokens_in)}</div><div class="sub">Tokens In</div></div>
-          <div><div style="font-size:1.3rem;font-weight:600;">${formatTokens(totals.tokens_out)}</div><div class="sub">Tokens Out</div></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- CLOUDFLARE -->
-    <div class="card" style="margin-top:1rem;">
-      <div class="card-title" style="margin-bottom:0.75rem;">☁️ Cloudflare (Today)</div>
-      <div class="grid grid-3" style="gap:0.5rem;">
-        <div>
-          <div style="display:flex;justify-content:space-between;font-size:0.8rem;">
-            <span>Requests</span>
-            <span style="color:${(cfUsage.requests||0) > 80000 ? '#ef4444' : '#10b981'};">${((cfUsage.requests||0)/1000).toFixed(0)}k/100k</span>
-          </div>
-          <div class="progress"><div class="progress-bar" style="width:${Math.min((cfUsage.requests||0)/100000*100,100)}%;background:${(cfUsage.requests||0) > 80000 ? '#ef4444' : '#10b981'};"></div></div>
-        </div>
-        <div>
-          <div style="display:flex;justify-content:space-between;font-size:0.8rem;">
-            <span>KV Reads</span>
-            <span style="color:${(cfUsage.kv_reads||0) > 80000 ? '#ef4444' : '#10b981'};">${((cfUsage.kv_reads||0)/1000).toFixed(0)}k/100k</span>
-          </div>
-          <div class="progress"><div class="progress-bar" style="width:${Math.min((cfUsage.kv_reads||0)/100000*100,100)}%;background:${(cfUsage.kv_reads||0) > 80000 ? '#ef4444' : '#10b981'};"></div></div>
-        </div>
-        <div>
-          <div style="display:flex;justify-content:space-between;font-size:0.8rem;">
-            <span>KV Writes</span>
-            <span style="color:${(cfUsage.kv_writes||0) > 800 ? '#ef4444' : '#10b981'};">${cfUsage.kv_writes||0}/1k</span>
-          </div>
-          <div class="progress"><div class="progress-bar" style="width:${Math.min((cfUsage.kv_writes||0)/1000*100,100)}%;background:${(cfUsage.kv_writes||0) > 800 ? '#ef4444' : '#10b981'};"></div></div>
-        </div>
-      </div>
-    </div>
-
-    <footer>Opus 4.6 Dashboard v3.0 | Sessions: ${maxSessions} | Last: ${maxLastSession}</footer>
+    <div class="footer">Opus 4.6 • $103/mo • v3.1</div>
   </div>
 
   <script>
-    const colors = {anthropic:'#a78bfa', z_ai:'#f59e0b', openrouter:'#10b981', gemini:'#60a5fa', local:'#888'};
-
-    async function loadFeed() {
+    async function loadActivity() {
       try {
         const r = await fetch('/usage/live');
         const d = await r.json();
-        const f = document.getElementById('liveFeed');
+        const el = document.getElementById('activityList');
         if (d.usage?.length) {
-          f.innerHTML = d.usage.slice(0,5).map(u =>
-            '<div class="feed-item"><span style="color:'+(colors[u.provider]||'#888')+'">'+(u.model||'?').split('/').pop().slice(0,12)+'</span><span style="color:#888">'+((u.tokens_in||0)+(u.tokens_out||0)).toLocaleString()+'</span></div>'
+          el.innerHTML = d.usage.slice(0,5).map(u =>
+            '<div class="activity-item"><span class="activity-model">'+(u.model||'unknown').split('/').pop()+'</span><span class="activity-tokens">'+((u.tokens_in||0)+(u.tokens_out||0)).toLocaleString()+' tokens</span></div>'
           ).join('');
-        } else f.innerHTML = '<div style="color:#888;text-align:center;">No activity</div>';
+        } else {
+          el.innerHTML = '<div style="color:#888;text-align:center;">No recent activity</div>';
+        }
       } catch(e) {}
     }
-    loadFeed(); setInterval(loadFeed, 30000);
-
-    function showLog() {
-      const m = document.createElement('div');
-      m.id = 'modal';
-      m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:100;';
-      m.innerHTML = '<div style="background:#12121a;border:1px solid rgba(255,255,255,0.1);border-radius:0.75rem;width:90%;max-width:700px;max-height:70vh;display:flex;flex-direction:column;"><div style="padding:1rem;border-bottom:1px solid rgba(255,255,255,0.1);display:flex;justify-content:space-between;"><span style="font-weight:600;">Usage Log</span><button onclick="document.getElementById(\\'modal\\').remove()" style="background:none;border:none;color:#888;cursor:pointer;font-size:1.2rem;">&times;</button></div><div id="logContent" style="padding:1rem;overflow-y:auto;flex:1;font-size:0.85rem;">Loading...</div></div>';
-      document.body.appendChild(m);
-      m.onclick = e => { if(e.target===m) m.remove(); };
-      fetch('/usage?limit=30').then(r=>r.json()).then(d => {
-        document.getElementById('logContent').innerHTML = d.usage?.length
-          ? '<table style="width:100%;border-collapse:collapse;"><thead><tr style="color:#888;text-align:left;font-size:0.75rem;"><th style="padding:0.3rem;">Time</th><th>Model</th><th>Task</th><th>Tokens</th></tr></thead><tbody>'+d.usage.map(u=>'<tr style="border-bottom:1px solid rgba(255,255,255,0.05);"><td style="padding:0.3rem;color:#888;">'+new Date(u.timestamp).toLocaleString()+'</td><td style="color:'+(colors[u.provider]||'#888')+';">'+(u.model||'-')+'</td><td>'+(u.task_type||'-')+'</td><td>'+((u.tokens_in||0)+(u.tokens_out||0)).toLocaleString()+'</td></tr>').join('')+'</tbody></table>'
-          : '<div style="color:#888;text-align:center;">No data</div>';
-      });
-    }
+    loadActivity();
+    setInterval(loadActivity, 30000);
   </script>
 </body>
 </html>`;
