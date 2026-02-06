@@ -1,5 +1,5 @@
 /**
- * Arni Worker v2.6.0 - Full Autonomous Agent Platform
+ * Arni Worker v2.7.0 - Full Autonomous Agent Platform
  *
  * Features:
  * - Webhook receiver
@@ -61,7 +61,7 @@ export default {
           status: 'ok',
           agent: 'arni',
           timestamp: new Date().toISOString(),
-          version: '2.6.0',
+          version: '2.7.0',
           kv: env.MEMORY ? 'connected' : 'not bound',
           stats,
         }, corsHeaders);
@@ -374,6 +374,19 @@ export default {
       if (path === '/usage/stats' && method === 'GET') {
         const stats = await getModelStats(env);
         return json({ stats }, corsHeaders);
+      }
+
+      // Live usage feed (last 10)
+      if (path === '/usage/live' && method === 'GET') {
+        if (!env.MEMORY) return json({ error: 'KV not bound' }, corsHeaders, 500);
+        const list = await env.MEMORY.list({ prefix: 'usage:', limit: 10 });
+        const usage = await Promise.all(
+          list.keys.map(async k => {
+            const val = await env.MEMORY.get(k.name);
+            return val ? JSON.parse(val) : null;
+          })
+        );
+        return json({ usage: usage.filter(Boolean).reverse() }, corsHeaders);
       }
 
       // 404
@@ -992,7 +1005,7 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.5rem;">
         <!-- 5h Window Progress -->
         <div style="background:var(--bg-secondary);padding:1rem;border-radius:0.75rem;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
@@ -1023,6 +1036,18 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
             <div style="height:100%;width:${weeklyPercent}%;background:linear-gradient(90deg, #3b82f6, ${weeklyPercent > 80 ? '#ef4444' : weeklyPercent > 50 ? '#f59e0b' : '#60a5fa'});"></div>
           </div>
           <div style="font-size:0.8rem;color:#10b981;">${formatTokens(weeklyRemaining)} remaining this week</div>
+        </div>
+
+        <!-- Live Activity Feed -->
+        <div style="background:var(--bg-secondary);padding:1rem;border-radius:0.75rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+            <span style="color:var(--text-secondary);font-size:0.85rem;">📡 Live Activity</span>
+            <span id="liveIndicator" style="width:8px;height:8px;background:#10b981;border-radius:50%;animation:pulse 2s infinite;"></span>
+          </div>
+          <div id="liveActivityFeed" style="font-size:0.75rem;max-height:120px;overflow-y:auto;">
+            <div style="color:var(--text-secondary);text-align:center;padding:1rem;">Loading...</div>
+          </div>
+          <button onclick="showFullLog()" style="margin-top:0.5rem;width:100%;padding:0.5rem;background:rgba(124,58,237,0.2);border:1px solid #7c3aed;border-radius:0.5rem;color:#a78bfa;cursor:pointer;font-size:0.75rem;">View Full Log →</button>
         </div>
       </div>
 
@@ -1228,7 +1253,7 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
     </div>
 
     <footer>
-      <p>Arni v2.5.0 | <a href="/">API Docs</a> | Last updated: ${stats.lastUpdated || 'Never'}</p>
+      <p>Arni v2.7.0 | <a href="/">API Docs</a> | Last updated: ${stats.lastUpdated || 'Never'}</p>
     </footer>
   </div>
 
@@ -1279,6 +1304,97 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
         }
       }
     });
+
+    // Live Activity Feed
+    const providerColors = {
+      anthropic: '#a78bfa',
+      openrouter: '#34d399',
+      z_ai: '#fbbf24',
+      gemini: '#60a5fa',
+      local: '#9ca3af'
+    };
+
+    async function loadLiveFeed() {
+      try {
+        const res = await fetch('/usage/live');
+        const data = await res.json();
+        const feed = document.getElementById('liveActivityFeed');
+        if (data.usage && data.usage.length > 0) {
+          feed.innerHTML = data.usage.slice(0, 5).map(u => {
+            const time = new Date(u.timestamp).toLocaleTimeString();
+            const color = providerColors[u.provider] || '#888';
+            const tokens = ((u.tokens_in || 0) + (u.tokens_out || 0)).toLocaleString();
+            return '<div style="padding:0.35rem 0;border-bottom:1px solid rgba(255,255,255,0.05);display:flex;justify-content:space-between;align-items:center;">' +
+              '<div><span style="color:' + color + ';font-weight:500;">' + (u.model || 'unknown').split('/').pop().slice(0,15) + '</span></div>' +
+              '<div style="display:flex;gap:0.5rem;align-items:center;">' +
+                '<span style="color:var(--text-secondary);">' + tokens + '</span>' +
+                '<span style="color:var(--text-secondary);font-size:0.65rem;">' + time + '</span>' +
+              '</div>' +
+            '</div>';
+          }).join('');
+        } else {
+          feed.innerHTML = '<div style="color:var(--text-secondary);text-align:center;padding:1rem;">No activity yet</div>';
+        }
+      } catch (e) {
+        console.error('Live feed error:', e);
+      }
+    }
+
+    // Load immediately and refresh every 30s
+    loadLiveFeed();
+    setInterval(loadLiveFeed, 30000);
+
+    // Full Log Modal
+    function showFullLog() {
+      const modal = document.createElement('div');
+      modal.id = 'logModal';
+      modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:1000;';
+      modal.innerHTML = '<div style="background:#12121a;border:1px solid rgba(255,255,255,0.1);border-radius:1rem;width:90%;max-width:800px;max-height:80vh;overflow:hidden;display:flex;flex-direction:column;">' +
+        '<div style="padding:1rem;border-bottom:1px solid rgba(255,255,255,0.1);display:flex;justify-content:space-between;align-items:center;">' +
+          '<h3 style="margin:0;color:#a78bfa;">📋 Full Usage Log</h3>' +
+          '<button onclick="closeModal()" style="background:none;border:none;color:#888;font-size:1.5rem;cursor:pointer;">&times;</button>' +
+        '</div>' +
+        '<div id="fullLogContent" style="padding:1rem;overflow-y:auto;flex:1;">Loading...</div>' +
+      '</div>';
+      document.body.appendChild(modal);
+      modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+      loadFullLog();
+    }
+
+    function closeModal() {
+      const modal = document.getElementById('logModal');
+      if (modal) modal.remove();
+    }
+
+    async function loadFullLog() {
+      try {
+        const res = await fetch('/usage?limit=50');
+        const data = await res.json();
+        const content = document.getElementById('fullLogContent');
+        if (data.usage && data.usage.length > 0) {
+          content.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">' +
+            '<thead><tr style="color:var(--text-secondary);text-align:left;border-bottom:1px solid rgba(255,255,255,0.1);">' +
+              '<th style="padding:0.5rem;">Time</th><th>Provider</th><th>Model</th><th>Task</th><th>Tokens</th>' +
+            '</tr></thead><tbody>' +
+            data.usage.map(u => {
+              const time = new Date(u.timestamp).toLocaleString();
+              const color = providerColors[u.provider] || '#888';
+              return '<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">' +
+                '<td style="padding:0.5rem;color:var(--text-secondary);">' + time + '</td>' +
+                '<td><span style="color:' + color + ';">' + u.provider + '</span></td>' +
+                '<td style="font-family:monospace;">' + (u.model || '-') + '</td>' +
+                '<td>' + (u.task_type || '-') + '</td>' +
+                '<td>' + ((u.tokens_in||0)+(u.tokens_out||0)).toLocaleString() + '</td>' +
+              '</tr>';
+            }).join('') +
+            '</tbody></table>';
+        } else {
+          content.innerHTML = '<div style="text-align:center;color:var(--text-secondary);">No usage data</div>';
+        }
+      } catch (e) {
+        document.getElementById('fullLogContent').innerHTML = '<div style="color:#ef4444;">Error loading log</div>';
+      }
+    }
   </script>
 </body>
 </html>`;
