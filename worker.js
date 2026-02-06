@@ -48,7 +48,7 @@ export default {
           status: 'ok',
           agent: 'arni',
           timestamp: new Date().toISOString(),
-          version: '2.0.0',
+          version: '2.0.1',
           kv: env.MEMORY ? 'connected' : 'not bound',
           stats,
         }, corsHeaders);
