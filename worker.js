@@ -1,5 +1,5 @@
 /**
- * Arni Worker v2.7.0 - Full Autonomous Agent Platform
+ * Arni Worker v3.0.0 - Full Autonomous Agent Platform
  *
  * Features:
  * - Webhook receiver
@@ -61,7 +61,7 @@ export default {
           status: 'ok',
           agent: 'arni',
           timestamp: new Date().toISOString(),
-          version: '2.7.0',
+          version: '3.0.0',
           kv: env.MEMORY ? 'connected' : 'not bound',
           stats,
         }, corsHeaders);
@@ -709,19 +709,16 @@ async function updateModelStats(env, usage) {
 
 function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
   const providers = stats.providers || {};
-  const models = stats.models || {};
-  const taskTypes = stats.task_types || {};
-  const daily = stats.daily || {};
-  const totals = stats.totals || { requests: 0, tokens_in: 0, tokens_out: 0, cost: 0, savings: 0 };
+  const totals = stats.totals || { requests: 0, tokens_in: 0, tokens_out: 0 };
 
-  // Claude Max usage defaults (5h window)
+  // Claude Max usage
   const maxTokensUsed = maxUsage.tokensUsed || 0;
   const maxTokensLimit = maxUsage.tokensLimit || 88000;
   const maxTimeRemaining = maxUsage.timeRemainingHours || '5.0';
   const maxSessions = maxUsage.sessions || 0;
   const maxPercentUsed = Math.min((maxTokensUsed / maxTokensLimit) * 100, 100);
   const maxTokensRemaining = Math.max(maxTokensLimit - maxTokensUsed, 0);
-  const maxLastSession = maxUsage.lastSession ? new Date(maxUsage.lastSession).toLocaleTimeString() : 'Never';
+  const maxLastSession = maxUsage.lastSession ? new Date(maxUsage.lastSession).toLocaleTimeString() : '-';
 
   // Weekly limits
   const weeklyUsed = maxUsage.weeklyTokensUsed || 0;
@@ -730,670 +727,215 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
   const weeklyRemaining = Math.max(weeklyLimit - weeklyUsed, 0);
   const daysUntilReset = maxUsage.daysUntilWeekReset || 7;
 
-  // Get last 7 days for chart
-  const last7Days = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const key = d.toISOString().split('T')[0];
-    last7Days.push({
-      date: key.slice(5), // MM-DD
-      requests: daily[key]?.requests || 0,
-      cost: daily[key]?.cost || 0,
-    });
-  }
-
-  const providerColors = {
-    anthropic: '#7c3aed',
-    openrouter: '#10b981',
-    z_ai: '#f59e0b',
-    gemini: '#3b82f6',
-    local: '#6b7280',
-  };
+  // Status colors
+  const statusColor = maxPercentUsed >= 100 ? '#ef4444' : maxPercentUsed > 80 ? '#f59e0b' : '#10b981';
+  const weeklyColor = weeklyPercent > 80 ? '#ef4444' : weeklyPercent > 50 ? '#f59e0b' : '#10b981';
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Arni Dashboard - Model Usage Analytics</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <title>Opus 4.6 Control Panel</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    :root {
-      --bg-primary: #0a0a0f;
-      --bg-secondary: #12121a;
-      --bg-card: rgba(255,255,255,0.03);
-      --border: rgba(255,255,255,0.08);
-      --text-primary: #f0f0f5;
-      --text-secondary: #888898;
-      --accent: #00ff88;
-      --accent-dim: rgba(0,255,136,0.1);
-      --purple: #7c3aed;
-      --green: #10b981;
-      --yellow: #f59e0b;
-      --blue: #3b82f6;
-      --red: #ef4444;
-    }
-    body {
-      font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
-      background: var(--bg-primary);
-      color: var(--text-primary);
-      min-height: 100vh;
-      line-height: 1.6;
-    }
-    .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+    body { font-family: -apple-system, system-ui, sans-serif; background: #0a0a0f; color: #f0f0f5; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+    .header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 0; border-bottom: 1px solid rgba(255,255,255,0.1); margin-bottom: 1.5rem; }
+    .header h1 { font-size: 1.3rem; color: #a78bfa; }
+    .status { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; animation: pulse 2s infinite; }
+    @keyframes pulse { 50% { opacity: 0.5; } }
 
-    /* Header */
-    header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 2rem;
-      padding-bottom: 1.5rem;
-      border-bottom: 1px solid var(--border);
-    }
-    .logo { display: flex; align-items: center; gap: 1rem; }
-    .logo h1 {
-      font-size: 1.5rem;
-      font-weight: 600;
-      background: linear-gradient(135deg, var(--accent), #00ccff);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-    .logo span { color: var(--text-secondary); font-size: 0.9rem; }
-    .status-badge {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      background: var(--accent-dim);
-      border: 1px solid var(--accent);
-      padding: 0.5rem 1rem;
-      border-radius: 2rem;
-      font-size: 0.85rem;
-    }
-    .status-dot {
-      width: 8px; height: 8px;
-      background: var(--accent);
-      border-radius: 50%;
-      animation: pulse 2s infinite;
-    }
-    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.6;transform:scale(0.95)} }
+    .grid { display: grid; gap: 1rem; margin-bottom: 1.5rem; }
+    .grid-2 { grid-template-columns: 1fr 1fr; }
+    .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+    @media (max-width: 768px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
 
-    /* Stats Grid */
-    .stats-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 1rem;
-      margin-bottom: 2rem;
-    }
-    .stat-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 1rem;
-      padding: 1.5rem;
-      position: relative;
-      overflow: hidden;
-    }
-    .stat-card::before {
-      content: '';
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: 3px;
-      background: var(--accent);
-    }
-    .stat-card.purple::before { background: var(--purple); }
-    .stat-card.green::before { background: var(--green); }
-    .stat-card.yellow::before { background: var(--yellow); }
-    .stat-card.blue::before { background: var(--blue); }
-    .stat-label { color: var(--text-secondary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
-    .stat-value { font-size: 2rem; font-weight: 700; }
-    .stat-sub { color: var(--text-secondary); font-size: 0.85rem; margin-top: 0.25rem; }
+    .card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 0.75rem; padding: 1rem; }
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; }
+    .card-title { font-size: 0.8rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
 
-    /* Charts Section */
-    .charts-grid {
-      display: grid;
-      grid-template-columns: 2fr 1fr;
-      gap: 1.5rem;
-      margin-bottom: 2rem;
-    }
-    @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
-    .chart-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 1rem;
-      padding: 1.5rem;
-    }
-    .chart-card h3 {
-      font-size: 1rem;
-      margin-bottom: 1rem;
-      color: var(--text-secondary);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    .chart-container { position: relative; height: 250px; }
+    .big-num { font-size: 2rem; font-weight: 700; }
+    .sub { font-size: 0.8rem; color: #888; margin-top: 0.25rem; }
 
-    /* Tables */
-    .tables-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-      gap: 1.5rem;
-      margin-bottom: 2rem;
-    }
-    .table-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 1rem;
-      padding: 1.5rem;
-    }
-    .table-card h3 {
-      font-size: 1rem;
-      margin-bottom: 1rem;
-      color: var(--text-secondary);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
-    th { color: var(--text-secondary); font-weight: 500; font-size: 0.8rem; text-transform: uppercase; }
-    td { font-size: 0.9rem; }
-    .provider-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.25rem 0.75rem;
-      border-radius: 1rem;
-      font-size: 0.8rem;
-      font-weight: 500;
-    }
-    .provider-badge.anthropic { background: rgba(124,58,237,0.2); color: #a78bfa; }
-    .provider-badge.openrouter { background: rgba(16,185,129,0.2); color: #34d399; }
-    .provider-badge.z_ai { background: rgba(245,158,11,0.2); color: #fbbf24; }
-    .provider-badge.gemini { background: rgba(59,130,246,0.2); color: #60a5fa; }
-    .provider-badge.local { background: rgba(107,114,128,0.2); color: #9ca3af; }
-    .cost { font-family: 'SF Mono', monospace; }
-    .cost.free { color: var(--green); }
-    .cost.low { color: var(--yellow); }
-    .cost.high { color: var(--red); }
+    .progress { height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; margin: 0.5rem 0; }
+    .progress-bar { height: 100%; transition: width 0.3s; }
 
-    /* Routing Config */
-    .config-section {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 1rem;
-      padding: 1.5rem;
-      margin-bottom: 2rem;
-    }
-    .config-section h3 {
-      font-size: 1rem;
-      margin-bottom: 1rem;
-      color: var(--text-secondary);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    .routing-tiers {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 1rem;
-    }
-    .tier {
-      background: var(--bg-secondary);
-      border-radius: 0.75rem;
-      padding: 1rem;
-      border-left: 3px solid var(--accent);
-    }
-    .tier.tier-1 { border-color: var(--green); }
-    .tier.tier-2 { border-color: var(--blue); }
-    .tier.tier-3 { border-color: var(--yellow); }
-    .tier.tier-4 { border-color: var(--purple); }
-    .tier-name { font-weight: 600; margin-bottom: 0.5rem; }
-    .tier-models { color: var(--text-secondary); font-size: 0.85rem; }
-    .tier-cost { font-family: 'SF Mono', monospace; font-size: 0.8rem; margin-top: 0.5rem; color: var(--accent); }
+    .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 500; }
 
-    /* Footer */
-    footer {
-      text-align: center;
-      color: var(--text-secondary);
-      font-size: 0.8rem;
-      padding-top: 1.5rem;
-      border-top: 1px solid var(--border);
-    }
-    footer a { color: var(--accent); text-decoration: none; }
-    footer a:hover { text-decoration: underline; }
+    .tier { padding: 0.75rem; background: #12121a; border-radius: 0.5rem; border-left: 3px solid; }
+    .tier-purple { border-color: #a78bfa; }
+    .tier-yellow { border-color: #f59e0b; }
+    .tier-green { border-color: #10b981; }
+    .tier-name { font-weight: 600; font-size: 0.9rem; }
+    .tier-desc { font-size: 0.75rem; color: #888; margin-top: 0.25rem; }
 
-    /* Savings highlight */
-    .savings-highlight {
-      background: linear-gradient(135deg, rgba(0,255,136,0.1), rgba(0,204,255,0.1));
-      border: 1px solid var(--accent);
-      border-radius: 1rem;
-      padding: 1.5rem;
-      text-align: center;
-      margin-bottom: 2rem;
-    }
-    .savings-highlight .big { font-size: 3rem; font-weight: 700; color: var(--accent); }
-    .savings-highlight .label { color: var(--text-secondary); margin-top: 0.5rem; }
+    #liveFeed { max-height: 150px; overflow-y: auto; font-size: 0.8rem; }
+    .feed-item { padding: 0.4rem 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; }
+
+    .btn { padding: 0.5rem 1rem; border: 1px solid rgba(255,255,255,0.2); background: transparent; color: #a78bfa; border-radius: 0.5rem; cursor: pointer; font-size: 0.8rem; }
+    .btn:hover { background: rgba(167,139,250,0.1); }
+
+    footer { text-align: center; padding: 1rem 0; color: #666; font-size: 0.75rem; border-top: 1px solid rgba(255,255,255,0.05); margin-top: 1.5rem; }
   </style>
 </head>
 <body>
   <div class="container">
-    <header>
-      <div class="logo">
-        <h1>Arni Dashboard</h1>
-        <span>Model Usage Analytics</span>
+    <div class="header">
+      <h1>🟣 Opus 4.6 Control Panel</h1>
+      <div class="status">
+        <span class="dot" style="background:${statusColor}"></span>
+        <span>${maxPercentUsed >= 100 ? 'LIMIT REACHED' : maxPercentUsed > 80 ? 'Near Limit' : 'Available'}</span>
       </div>
-      <div class="status-badge">
-        <span class="status-dot"></span>
-        <span>Live</span>
-      </div>
-    </header>
-
-    <!-- Claude Max Usage (Top Priority) -->
-    <div class="config-section" style="margin-bottom:1.5rem;background:linear-gradient(135deg, rgba(124,58,237,0.15), rgba(167,139,250,0.05));border:1px solid #7c3aed;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
-        <h3 style="margin:0;color:#a78bfa;display:flex;align-items:center;gap:0.5rem;">
-          <span style="font-size:1.2rem;">🟣</span> Claude Max Usage (Opus 4.6)
-        </h3>
-        <div style="display:flex;gap:1rem;">
-          <div style="display:flex;align-items:center;gap:0.5rem;background:rgba(124,58,237,0.2);padding:0.35rem 0.75rem;border-radius:1rem;">
-            <span style="color:var(--text-secondary);font-size:0.75rem;">5h window:</span>
-            <span style="color:#a78bfa;font-weight:600;">${maxTimeRemaining}h</span>
-          </div>
-          <div style="display:flex;align-items:center;gap:0.5rem;background:rgba(59,130,246,0.2);padding:0.35rem 0.75rem;border-radius:1rem;">
-            <span style="color:var(--text-secondary);font-size:0.75rem;">Week resets:</span>
-            <span style="color:#60a5fa;font-weight:600;">${daysUntilReset}d</span>
-          </div>
-        </div>
-      </div>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.5rem;">
-        <!-- 5h Window Progress -->
-        <div style="background:var(--bg-secondary);padding:1rem;border-radius:0.75rem;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
-            <span style="color:var(--text-secondary);font-size:0.85rem;">⏱️ 5-Hour Window</span>
-            <span style="font-size:0.8rem;color:${maxPercentUsed > 80 ? '#ef4444' : maxPercentUsed > 50 ? '#f59e0b' : '#10b981'};">${maxPercentUsed.toFixed(0)}%</span>
-          </div>
-          <div style="display:flex;align-items:baseline;gap:0.5rem;margin-bottom:0.5rem;">
-            <span style="font-size:1.75rem;font-weight:700;color:${maxPercentUsed > 80 ? '#ef4444' : maxPercentUsed > 50 ? '#f59e0b' : '#a78bfa'};">${formatTokens(maxTokensUsed)}</span>
-            <span style="color:var(--text-secondary);font-size:0.85rem;">/ ${formatTokens(maxTokensLimit)}</span>
-          </div>
-          <div style="height:8px;background:rgba(255,255,255,0.1);border-radius:4px;overflow:hidden;margin-bottom:0.5rem;">
-            <div style="height:100%;width:${maxPercentUsed}%;background:linear-gradient(90deg, #7c3aed, ${maxPercentUsed > 80 ? '#ef4444' : maxPercentUsed > 50 ? '#f59e0b' : '#a78bfa'});"></div>
-          </div>
-          <div style="font-size:0.8rem;color:#10b981;">${formatTokens(maxTokensRemaining)} remaining</div>
-        </div>
-
-        <!-- Weekly Progress -->
-        <div style="background:var(--bg-secondary);padding:1rem;border-radius:0.75rem;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
-            <span style="color:var(--text-secondary);font-size:0.85rem;">📅 Weekly Limit</span>
-            <span style="font-size:0.8rem;color:${weeklyPercent > 80 ? '#ef4444' : weeklyPercent > 50 ? '#f59e0b' : '#10b981'};">${weeklyPercent.toFixed(0)}%</span>
-          </div>
-          <div style="display:flex;align-items:baseline;gap:0.5rem;margin-bottom:0.5rem;">
-            <span style="font-size:1.75rem;font-weight:700;color:${weeklyPercent > 80 ? '#ef4444' : weeklyPercent > 50 ? '#f59e0b' : '#3b82f6'};">${formatTokens(weeklyUsed)}</span>
-            <span style="color:var(--text-secondary);font-size:0.85rem;">/ ${formatTokens(weeklyLimit)}</span>
-          </div>
-          <div style="height:8px;background:rgba(255,255,255,0.1);border-radius:4px;overflow:hidden;margin-bottom:0.5rem;">
-            <div style="height:100%;width:${weeklyPercent}%;background:linear-gradient(90deg, #3b82f6, ${weeklyPercent > 80 ? '#ef4444' : weeklyPercent > 50 ? '#f59e0b' : '#60a5fa'});"></div>
-          </div>
-          <div style="font-size:0.8rem;color:#10b981;">${formatTokens(weeklyRemaining)} remaining this week</div>
-        </div>
-
-        <!-- Live Activity Feed -->
-        <div style="background:var(--bg-secondary);padding:1rem;border-radius:0.75rem;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
-            <span style="color:var(--text-secondary);font-size:0.85rem;">📡 Live Activity</span>
-            <span id="liveIndicator" style="width:8px;height:8px;background:#10b981;border-radius:50%;animation:pulse 2s infinite;"></span>
-          </div>
-          <div id="liveActivityFeed" style="font-size:0.75rem;max-height:120px;overflow-y:auto;">
-            <div style="color:var(--text-secondary);text-align:center;padding:1rem;">Loading...</div>
-          </div>
-          <button onclick="showFullLog()" style="margin-top:0.5rem;width:100%;padding:0.5rem;background:rgba(124,58,237,0.2);border:1px solid #7c3aed;border-radius:0.5rem;color:#a78bfa;cursor:pointer;font-size:0.75rem;">View Full Log →</button>
-        </div>
-      </div>
-
-      <!-- Quick Stats Row -->
-      <div style="display:flex;gap:1rem;margin-top:1rem;">
-        <div style="flex:1;background:var(--bg-secondary);padding:0.75rem;border-radius:0.5rem;text-align:center;">
-          <div style="color:var(--text-secondary);font-size:0.7rem;">SESSIONS</div>
-          <div style="font-size:1.1rem;font-weight:600;color:var(--text-primary);">${maxSessions}</div>
-        </div>
-        <div style="flex:1;background:var(--bg-secondary);padding:0.75rem;border-radius:0.5rem;text-align:center;">
-          <div style="color:var(--text-secondary);font-size:0.7rem;">LAST ACTIVE</div>
-          <div style="font-size:0.9rem;color:var(--text-primary);">${maxLastSession}</div>
-        </div>
-        <div style="flex:1;background:var(--bg-secondary);padding:0.75rem;border-radius:0.5rem;text-align:center;">
-          <div style="color:var(--text-secondary);font-size:0.7rem;">STATUS</div>
-          <div style="font-size:0.9rem;color:${maxPercentUsed > 90 || weeklyPercent > 90 ? '#ef4444' : '#10b981'};">${maxPercentUsed > 90 || weeklyPercent > 90 ? '⚠️ Near Limit' : '✅ Available'}</div>
-        </div>
-      </div>
-
-      <!-- Proactive Usage Suggestion -->
-      ${Math.min(maxTokensRemaining, weeklyRemaining) > 20000 ? renderProactiveBox(Math.min(maxTokensRemaining, weeklyRemaining)) : ''}
     </div>
 
-    <!-- Monthly Subscriptions Summary -->
-    <div class="savings-highlight">
-      <div class="big">$103/mo</div>
-      <div class="label">Total Monthly Subscriptions</div>
-      <div style="margin-top:1rem;display:flex;justify-content:center;gap:2rem;flex-wrap:wrap;">
-        <div style="text-align:center;">
-          <div style="font-size:1.5rem;color:#a78bfa;">$100</div>
-          <div style="font-size:0.75rem;color:var(--text-secondary);">Claude Max</div>
+    <!-- MY LIMITS -->
+    <div class="grid grid-3">
+      <div class="card" style="border-color:${statusColor}40;">
+        <div class="card-header">
+          <span class="card-title">⏱️ 5h Window</span>
+          <span style="color:${statusColor};font-size:0.85rem;font-weight:600;">${maxPercentUsed.toFixed(0)}%</span>
         </div>
-        <div style="text-align:center;">
-          <div style="font-size:1.5rem;color:#fbbf24;">$3</div>
-          <div style="font-size:0.75rem;color:var(--text-secondary);">Z.ai GLM</div>
+        <div class="big-num" style="color:${statusColor};">${formatTokens(maxTokensUsed)}</div>
+        <div class="sub">of ${formatTokens(maxTokensLimit)} tokens</div>
+        <div class="progress"><div class="progress-bar" style="width:${Math.min(maxPercentUsed,100)}%;background:${statusColor};"></div></div>
+        <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#888;">
+          <span>${formatTokens(maxTokensRemaining)} left</span>
+          <span>resets in ${maxTimeRemaining}h</span>
         </div>
-        <div style="text-align:center;">
-          <div style="font-size:1.5rem;color:#34d399;">FREE</div>
-          <div style="font-size:0.75rem;color:var(--text-secondary);">Gemini</div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">📅 Weekly</span>
+          <span style="color:${weeklyColor};font-size:0.85rem;font-weight:600;">${weeklyPercent.toFixed(0)}%</span>
         </div>
-        <div style="text-align:center;">
-          <div style="font-size:1.5rem;color:#34d399;">FREE</div>
-          <div style="font-size:0.75rem;color:var(--text-secondary);">OpenRouter</div>
+        <div class="big-num" style="color:${weeklyColor};">${formatTokens(weeklyUsed)}</div>
+        <div class="sub">of ${formatTokens(weeklyLimit)} tokens</div>
+        <div class="progress"><div class="progress-bar" style="width:${Math.min(weeklyPercent,100)}%;background:${weeklyColor};"></div></div>
+        <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#888;">
+          <span>${formatTokens(weeklyRemaining)} left</span>
+          <span>Mon reset (${daysUntilReset}d)</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">📡 Live Activity</span>
+          <span class="dot" style="background:#10b981;width:6px;height:6px;"></span>
+        </div>
+        <div id="liveFeed"><div style="color:#888;text-align:center;padding:1rem;">Loading...</div></div>
+        <button class="btn" onclick="showLog()" style="width:100%;margin-top:0.5rem;">Full Log →</button>
+      </div>
+    </div>
+
+    <!-- ROUTING RULES -->
+    <div class="card" style="margin-bottom:1rem;">
+      <div class="card-title" style="margin-bottom:1rem;">🧠 Routing Rules (I am the orchestrator)</div>
+      <div class="grid grid-3" style="gap:0.75rem;">
+        <div class="tier tier-purple">
+          <div class="tier-name">Opus 4.6 (ME)</div>
+          <div class="tier-desc">Architecture • Security • Planning • Orchestration</div>
+          <div style="font-size:0.7rem;color:#a78bfa;margin-top:0.25rem;">$100/mo Max</div>
+        </div>
+        <div class="tier tier-yellow">
+          <div class="tier-name">Z.ai GLM</div>
+          <div class="tier-desc">Coding • Tests • Refactoring • Bulk</div>
+          <div style="font-size:0.7rem;color:#f59e0b;margin-top:0.25rem;">$3/mo (delegate here)</div>
+        </div>
+        <div class="tier tier-green">
+          <div class="tier-name">Free Models</div>
+          <div class="tier-desc">Simple • Formatting • Translation</div>
+          <div style="font-size:0.7rem;color:#10b981;margin-top:0.25rem;">OpenRouter / Gemini</div>
         </div>
       </div>
     </div>
 
-    <!-- Stats Grid -->
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-label">Total Requests</div>
-        <div class="stat-value">${totals.requests.toLocaleString()}</div>
-        <div class="stat-sub">All time</div>
-      </div>
-      <div class="stat-card purple">
-        <div class="stat-label">Tokens In</div>
-        <div class="stat-value">${formatTokens(totals.tokens_in)}</div>
-        <div class="stat-sub">Input tokens</div>
-      </div>
-      <div class="stat-card green">
-        <div class="stat-label">Tokens Out</div>
-        <div class="stat-value">${formatTokens(totals.tokens_out)}</div>
-        <div class="stat-sub">Output tokens</div>
-      </div>
-      <div class="stat-card yellow">
-        <div class="stat-label">Total Cost</div>
-        <div class="stat-value">$${totals.cost.toFixed(4)}</div>
-        <div class="stat-sub">Actual spend</div>
-      </div>
-    </div>
-
-    <!-- Charts -->
-    <div class="charts-grid">
-      <div class="chart-card">
-        <h3>Usage Over Time (7 Days)</h3>
-        <div class="chart-container">
-          <canvas id="usageChart"></canvas>
+    <!-- COSTS & STATS -->
+    <div class="grid grid-2">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:0.75rem;">💰 Monthly Cost</div>
+        <div style="display:flex;gap:1.5rem;">
+          <div><div style="font-size:1.5rem;font-weight:700;color:#a78bfa;">$100</div><div class="sub">Claude Max</div></div>
+          <div><div style="font-size:1.5rem;font-weight:700;color:#f59e0b;">$3</div><div class="sub">Z.ai GLM</div></div>
+          <div><div style="font-size:1.5rem;font-weight:700;color:#10b981;">FREE</div><div class="sub">Gemini/OR</div></div>
+        </div>
+        <div style="margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid rgba(255,255,255,0.05);font-size:0.85rem;">
+          Total: <strong>$103/mo</strong>
         </div>
       </div>
-      <div class="chart-card">
-        <h3>By Provider</h3>
-        <div class="chart-container">
-          <canvas id="providerChart"></canvas>
+
+      <div class="card">
+        <div class="card-title" style="margin-bottom:0.75rem;">📊 All-Time Stats</div>
+        <div style="display:flex;gap:1.5rem;">
+          <div><div style="font-size:1.3rem;font-weight:600;">${totals.requests.toLocaleString()}</div><div class="sub">Requests</div></div>
+          <div><div style="font-size:1.3rem;font-weight:600;">${formatTokens(totals.tokens_in)}</div><div class="sub">Tokens In</div></div>
+          <div><div style="font-size:1.3rem;font-weight:600;">${formatTokens(totals.tokens_out)}</div><div class="sub">Tokens Out</div></div>
         </div>
       </div>
     </div>
 
-    <!-- Model → Task Matrix -->
-    <div class="table-card" style="margin-bottom: 2rem;">
-      <h3>🎯 Model → Task Type Usage</h3>
-      <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.9rem;">Which models are used for which types of work</p>
-      ${renderModelTaskMatrix(models, taskTypes, stats.model_task_matrix || {})}
-    </div>
-
-    <!-- Routing Config -->
-    <div class="config-section">
-      <h3>Active Routing Configuration</h3>
-      <div class="routing-tiers">
-        <div class="tier tier-1">
-          <div class="tier-name">🟢 Tier 1 - Simple</div>
-          <div class="tier-models">OpenRouter free, Gemini Flash</div>
-          <div class="tier-cost" style="color:#34d399;">FREE</div>
-        </div>
-        <div class="tier tier-2">
-          <div class="tier-name">🔵 Tier 2 - Coding</div>
-          <div class="tier-models">GLM-4.6 via Z.ai</div>
-          <div class="tier-cost" style="color:#fbbf24;">$3/mo subscription</div>
-        </div>
-        <div class="tier tier-3">
-          <div class="tier-name">🟡 Tier 3 - Complex</div>
-          <div class="tier-models">GLM-4.7 via Z.ai, Gemini Pro</div>
-          <div class="tier-cost" style="color:#fbbf24;">$3/mo + Gemini free</div>
-        </div>
-        <div class="tier tier-4">
-          <div class="tier-name">🟣 Tier 4 - Critical/Strategic</div>
-          <div class="tier-models">Claude Opus 4.6</div>
-          <div class="tier-cost" style="color:#a78bfa;">$100/mo subscription</div>
-          <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.5rem;">Business planning • Architecture • Security • Agent orchestration</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Tables -->
-    <div class="tables-grid">
-      <div class="table-card">
-        <h3>By Provider</h3>
-        <table>
-          <thead>
-            <tr><th>Provider</th><th>Requests</th><th>Tokens</th><th>Cost</th></tr>
-          </thead>
-          <tbody>
-            ${renderProviderRows(providers)}
-          </tbody>
-        </table>
-      </div>
-      <div class="table-card">
-        <h3>By Task Type</h3>
-        <table>
-          <thead>
-            <tr><th>Type</th><th>Requests</th><th>Cost</th></tr>
-          </thead>
-          <tbody>
-            ${renderTaskTypeRows(taskTypes)}
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- Top Models -->
-    <div class="table-card">
-      <h3>Top Models</h3>
-      <table>
-        <thead>
-          <tr><th>Model</th><th>Requests</th><th>Tokens In</th><th>Tokens Out</th><th>Cost</th></tr>
-        </thead>
-        <tbody>
-          ${renderModelRows(models)}
-        </tbody>
-      </table>
-    </div>
-
-    <!-- Cloudflare Usage -->
-    <div class="config-section" style="margin-top:2rem;">
-      <h3>☁️ Cloudflare Free Tier Usage (Today)</h3>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-top:1rem;">
-        <div style="background:var(--bg-secondary);padding:1rem;border-radius:0.75rem;">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="color:var(--text-secondary);">Workers Requests</span>
-            <span style="font-size:0.75rem;color:${(cfUsage.requests || 0) > 80000 ? '#ef4444' : (cfUsage.requests || 0) > 50000 ? '#f59e0b' : '#10b981'};">${((cfUsage.requests || 0) / 100000 * 100).toFixed(1)}%</span>
+    <!-- CLOUDFLARE -->
+    <div class="card" style="margin-top:1rem;">
+      <div class="card-title" style="margin-bottom:0.75rem;">☁️ Cloudflare (Today)</div>
+      <div class="grid grid-3" style="gap:0.5rem;">
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:0.8rem;">
+            <span>Requests</span>
+            <span style="color:${(cfUsage.requests||0) > 80000 ? '#ef4444' : '#10b981'};">${((cfUsage.requests||0)/1000).toFixed(0)}k/100k</span>
           </div>
-          <div style="font-size:1.5rem;font-weight:700;color:var(--text-primary);">${(cfUsage.requests || 0).toLocaleString()}</div>
-          <div style="font-size:0.75rem;color:var(--text-secondary);">of 100,000/day FREE</div>
-          <div style="margin-top:0.5rem;height:4px;background:var(--border);border-radius:2px;overflow:hidden;">
-            <div style="height:100%;width:${Math.min((cfUsage.requests || 0) / 100000 * 100, 100)}%;background:${(cfUsage.requests || 0) > 80000 ? '#ef4444' : (cfUsage.requests || 0) > 50000 ? '#f59e0b' : '#10b981'};"></div>
-          </div>
+          <div class="progress"><div class="progress-bar" style="width:${Math.min((cfUsage.requests||0)/100000*100,100)}%;background:${(cfUsage.requests||0) > 80000 ? '#ef4444' : '#10b981'};"></div></div>
         </div>
-        <div style="background:var(--bg-secondary);padding:1rem;border-radius:0.75rem;">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="color:var(--text-secondary);">KV Reads</span>
-            <span style="font-size:0.75rem;color:${(cfUsage.kv_reads || 0) > 80000 ? '#ef4444' : (cfUsage.kv_reads || 0) > 50000 ? '#f59e0b' : '#10b981'};">${((cfUsage.kv_reads || 0) / 100000 * 100).toFixed(1)}%</span>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:0.8rem;">
+            <span>KV Reads</span>
+            <span style="color:${(cfUsage.kv_reads||0) > 80000 ? '#ef4444' : '#10b981'};">${((cfUsage.kv_reads||0)/1000).toFixed(0)}k/100k</span>
           </div>
-          <div style="font-size:1.5rem;font-weight:700;color:var(--text-primary);">${(cfUsage.kv_reads || 0).toLocaleString()}</div>
-          <div style="font-size:0.75rem;color:var(--text-secondary);">of 100,000/day FREE</div>
-          <div style="margin-top:0.5rem;height:4px;background:var(--border);border-radius:2px;overflow:hidden;">
-            <div style="height:100%;width:${Math.min((cfUsage.kv_reads || 0) / 100000 * 100, 100)}%;background:${(cfUsage.kv_reads || 0) > 80000 ? '#ef4444' : (cfUsage.kv_reads || 0) > 50000 ? '#f59e0b' : '#10b981'};"></div>
-          </div>
+          <div class="progress"><div class="progress-bar" style="width:${Math.min((cfUsage.kv_reads||0)/100000*100,100)}%;background:${(cfUsage.kv_reads||0) > 80000 ? '#ef4444' : '#10b981'};"></div></div>
         </div>
-        <div style="background:var(--bg-secondary);padding:1rem;border-radius:0.75rem;">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="color:var(--text-secondary);">KV Writes</span>
-            <span style="font-size:0.75rem;color:${(cfUsage.kv_writes || 0) > 800 ? '#ef4444' : (cfUsage.kv_writes || 0) > 500 ? '#f59e0b' : '#10b981'};">${((cfUsage.kv_writes || 0) / 1000 * 100).toFixed(1)}%</span>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:0.8rem;">
+            <span>KV Writes</span>
+            <span style="color:${(cfUsage.kv_writes||0) > 800 ? '#ef4444' : '#10b981'};">${cfUsage.kv_writes||0}/1k</span>
           </div>
-          <div style="font-size:1.5rem;font-weight:700;color:var(--text-primary);">${(cfUsage.kv_writes || 0).toLocaleString()}</div>
-          <div style="font-size:0.75rem;color:var(--text-secondary);">of 1,000/day FREE</div>
-          <div style="margin-top:0.5rem;height:4px;background:var(--border);border-radius:2px;overflow:hidden;">
-            <div style="height:100%;width:${Math.min((cfUsage.kv_writes || 0) / 1000 * 100, 100)}%;background:${(cfUsage.kv_writes || 0) > 800 ? '#ef4444' : (cfUsage.kv_writes || 0) > 500 ? '#f59e0b' : '#10b981'};"></div>
-          </div>
+          <div class="progress"><div class="progress-bar" style="width:${Math.min((cfUsage.kv_writes||0)/1000*100,100)}%;background:${(cfUsage.kv_writes||0) > 800 ? '#ef4444' : '#10b981'};"></div></div>
         </div>
-      </div>
-      <div style="margin-top:1rem;font-size:0.8rem;color:var(--text-secondary);text-align:center;">
-        🟢 &lt;50% | 🟡 50-80% | 🔴 &gt;80% — Resets daily at midnight UTC
       </div>
     </div>
 
-    <footer>
-      <p>Arni v2.7.0 | <a href="/">API Docs</a> | Last updated: ${stats.lastUpdated || 'Never'}</p>
-    </footer>
+    <footer>Opus 4.6 Dashboard v3.0 | Sessions: ${maxSessions} | Last: ${maxLastSession}</footer>
   </div>
 
   <script>
-    // Usage Chart
-    const usageCtx = document.getElementById('usageChart').getContext('2d');
-    new Chart(usageCtx, {
-      type: 'line',
-      data: {
-        labels: ${JSON.stringify(last7Days.map(d => d.date))},
-        datasets: [{
-          label: 'Requests',
-          data: ${JSON.stringify(last7Days.map(d => d.requests))},
-          borderColor: '#00ff88',
-          backgroundColor: 'rgba(0,255,136,0.1)',
-          fill: true,
-          tension: 0.4,
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#888' } },
-          x: { grid: { display: false }, ticks: { color: '#888' } }
-        }
-      }
-    });
+    const colors = {anthropic:'#a78bfa', z_ai:'#f59e0b', openrouter:'#10b981', gemini:'#60a5fa', local:'#888'};
 
-    // Provider Chart
-    const providerCtx = document.getElementById('providerChart').getContext('2d');
-    new Chart(providerCtx, {
-      type: 'doughnut',
-      data: {
-        labels: ${JSON.stringify(Object.keys(providers))},
-        datasets: [{
-          data: ${JSON.stringify(Object.values(providers).map(p => p.requests))},
-          backgroundColor: ['#7c3aed', '#10b981', '#f59e0b', '#3b82f6', '#6b7280'],
-          borderWidth: 0,
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { position: 'bottom', labels: { color: '#888', padding: 15 } }
-        }
-      }
-    });
-
-    // Live Activity Feed
-    const providerColors = {
-      anthropic: '#a78bfa',
-      openrouter: '#34d399',
-      z_ai: '#fbbf24',
-      gemini: '#60a5fa',
-      local: '#9ca3af'
-    };
-
-    async function loadLiveFeed() {
+    async function loadFeed() {
       try {
-        const res = await fetch('/usage/live');
-        const data = await res.json();
-        const feed = document.getElementById('liveActivityFeed');
-        if (data.usage && data.usage.length > 0) {
-          feed.innerHTML = data.usage.slice(0, 5).map(u => {
-            const time = new Date(u.timestamp).toLocaleTimeString();
-            const color = providerColors[u.provider] || '#888';
-            const tokens = ((u.tokens_in || 0) + (u.tokens_out || 0)).toLocaleString();
-            return '<div style="padding:0.35rem 0;border-bottom:1px solid rgba(255,255,255,0.05);display:flex;justify-content:space-between;align-items:center;">' +
-              '<div><span style="color:' + color + ';font-weight:500;">' + (u.model || 'unknown').split('/').pop().slice(0,15) + '</span></div>' +
-              '<div style="display:flex;gap:0.5rem;align-items:center;">' +
-                '<span style="color:var(--text-secondary);">' + tokens + '</span>' +
-                '<span style="color:var(--text-secondary);font-size:0.65rem;">' + time + '</span>' +
-              '</div>' +
-            '</div>';
-          }).join('');
-        } else {
-          feed.innerHTML = '<div style="color:var(--text-secondary);text-align:center;padding:1rem;">No activity yet</div>';
-        }
-      } catch (e) {
-        console.error('Live feed error:', e);
-      }
+        const r = await fetch('/usage/live');
+        const d = await r.json();
+        const f = document.getElementById('liveFeed');
+        if (d.usage?.length) {
+          f.innerHTML = d.usage.slice(0,5).map(u =>
+            '<div class="feed-item"><span style="color:'+(colors[u.provider]||'#888')+'">'+(u.model||'?').split('/').pop().slice(0,12)+'</span><span style="color:#888">'+((u.tokens_in||0)+(u.tokens_out||0)).toLocaleString()+'</span></div>'
+          ).join('');
+        } else f.innerHTML = '<div style="color:#888;text-align:center;">No activity</div>';
+      } catch(e) {}
     }
+    loadFeed(); setInterval(loadFeed, 30000);
 
-    // Load immediately and refresh every 30s
-    loadLiveFeed();
-    setInterval(loadLiveFeed, 30000);
-
-    // Full Log Modal
-    function showFullLog() {
-      const modal = document.createElement('div');
-      modal.id = 'logModal';
-      modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:1000;';
-      modal.innerHTML = '<div style="background:#12121a;border:1px solid rgba(255,255,255,0.1);border-radius:1rem;width:90%;max-width:800px;max-height:80vh;overflow:hidden;display:flex;flex-direction:column;">' +
-        '<div style="padding:1rem;border-bottom:1px solid rgba(255,255,255,0.1);display:flex;justify-content:space-between;align-items:center;">' +
-          '<h3 style="margin:0;color:#a78bfa;">📋 Full Usage Log</h3>' +
-          '<button onclick="closeModal()" style="background:none;border:none;color:#888;font-size:1.5rem;cursor:pointer;">&times;</button>' +
-        '</div>' +
-        '<div id="fullLogContent" style="padding:1rem;overflow-y:auto;flex:1;">Loading...</div>' +
-      '</div>';
-      document.body.appendChild(modal);
-      modal.onclick = (e) => { if (e.target === modal) closeModal(); };
-      loadFullLog();
-    }
-
-    function closeModal() {
-      const modal = document.getElementById('logModal');
-      if (modal) modal.remove();
-    }
-
-    async function loadFullLog() {
-      try {
-        const res = await fetch('/usage?limit=50');
-        const data = await res.json();
-        const content = document.getElementById('fullLogContent');
-        if (data.usage && data.usage.length > 0) {
-          content.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">' +
-            '<thead><tr style="color:var(--text-secondary);text-align:left;border-bottom:1px solid rgba(255,255,255,0.1);">' +
-              '<th style="padding:0.5rem;">Time</th><th>Provider</th><th>Model</th><th>Task</th><th>Tokens</th>' +
-            '</tr></thead><tbody>' +
-            data.usage.map(u => {
-              const time = new Date(u.timestamp).toLocaleString();
-              const color = providerColors[u.provider] || '#888';
-              return '<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">' +
-                '<td style="padding:0.5rem;color:var(--text-secondary);">' + time + '</td>' +
-                '<td><span style="color:' + color + ';">' + u.provider + '</span></td>' +
-                '<td style="font-family:monospace;">' + (u.model || '-') + '</td>' +
-                '<td>' + (u.task_type || '-') + '</td>' +
-                '<td>' + ((u.tokens_in||0)+(u.tokens_out||0)).toLocaleString() + '</td>' +
-              '</tr>';
-            }).join('') +
-            '</tbody></table>';
-        } else {
-          content.innerHTML = '<div style="text-align:center;color:var(--text-secondary);">No usage data</div>';
-        }
-      } catch (e) {
-        document.getElementById('fullLogContent').innerHTML = '<div style="color:#ef4444;">Error loading log</div>';
-      }
+    function showLog() {
+      const m = document.createElement('div');
+      m.id = 'modal';
+      m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:100;';
+      m.innerHTML = '<div style="background:#12121a;border:1px solid rgba(255,255,255,0.1);border-radius:0.75rem;width:90%;max-width:700px;max-height:70vh;display:flex;flex-direction:column;"><div style="padding:1rem;border-bottom:1px solid rgba(255,255,255,0.1);display:flex;justify-content:space-between;"><span style="font-weight:600;">Usage Log</span><button onclick="document.getElementById(\\'modal\\').remove()" style="background:none;border:none;color:#888;cursor:pointer;font-size:1.2rem;">&times;</button></div><div id="logContent" style="padding:1rem;overflow-y:auto;flex:1;font-size:0.85rem;">Loading...</div></div>';
+      document.body.appendChild(m);
+      m.onclick = e => { if(e.target===m) m.remove(); };
+      fetch('/usage?limit=30').then(r=>r.json()).then(d => {
+        document.getElementById('logContent').innerHTML = d.usage?.length
+          ? '<table style="width:100%;border-collapse:collapse;"><thead><tr style="color:#888;text-align:left;font-size:0.75rem;"><th style="padding:0.3rem;">Time</th><th>Model</th><th>Task</th><th>Tokens</th></tr></thead><tbody>'+d.usage.map(u=>'<tr style="border-bottom:1px solid rgba(255,255,255,0.05);"><td style="padding:0.3rem;color:#888;">'+new Date(u.timestamp).toLocaleString()+'</td><td style="color:'+(colors[u.provider]||'#888')+';">'+(u.model||'-')+'</td><td>'+(u.task_type||'-')+'</td><td>'+((u.tokens_in||0)+(u.tokens_out||0)).toLocaleString()+'</td></tr>').join('')+'</tbody></table>'
+          : '<div style="color:#888;text-align:center;">No data</div>';
+      });
     }
   </script>
 </body>
@@ -1404,95 +946,6 @@ function formatTokens(num) {
   if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
   if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
   return num.toString();
-}
-
-function renderProviderRows(providers) {
-  const costInfo = {
-    anthropic: { text: '$100/mo', type: 'subscription', class: 'high' },
-    z_ai: { text: '$3/mo', type: 'subscription', class: 'low' },
-    gemini: { text: 'FREE', type: 'free tier', class: 'free' },
-    openrouter: { text: 'FREE', type: 'free models', class: 'free' },
-    local: { text: 'FREE', type: 'local', class: 'free' },
-  };
-  return Object.entries(providers).map(([name, data]) => {
-    const info = costInfo[name] || { text: 'Unknown', type: '', class: '' };
-    const tokens = formatTokens(data.tokens_in + data.tokens_out);
-    const typeLabel = info.type ? '<span style="font-size:0.7rem;color:var(--text-secondary);display:block;">' + info.type + '</span>' : '';
-    return '<tr><td><span class="provider-badge ' + name + '">' + name + '</span></td><td>' + data.requests.toLocaleString() + '</td><td>' + tokens + '</td><td class="cost ' + info.class + '">' + info.text + typeLabel + '</td></tr>';
-  }).join('');
-}
-
-function renderTaskTypeRows(taskTypes) {
-  return Object.entries(taskTypes).map(([type, data]) => {
-    const costText = data.cost === 0 ? 'FREE' : '$' + data.cost.toFixed(4);
-    return '<tr><td>' + type + '</td><td>' + data.requests.toLocaleString() + '</td><td class="cost">' + costText + '</td></tr>';
-  }).join('');
-}
-
-function renderModelRows(models) {
-  return Object.entries(models)
-    .sort((a, b) => b[1].requests - a[1].requests)
-    .slice(0, 10)
-    .map(([model, data]) => {
-      const costClass = data.cost === 0 ? 'free' : data.cost < 0.01 ? 'low' : 'high';
-      const costText = data.cost === 0 ? 'FREE' : '$' + data.cost.toFixed(4);
-      return '<tr><td><code>' + model + '</code></td><td>' + data.requests.toLocaleString() + '</td><td>' + formatTokens(data.tokens_in) + '</td><td>' + formatTokens(data.tokens_out) + '</td><td class="cost ' + costClass + '">' + costText + '</td></tr>';
-    }).join('');
-}
-
-function renderProactiveBox(tokensRemaining) {
-  const canDoTasks = [];
-  if (tokensRemaining >= 50000) canDoTasks.push('Deep architecture review');
-  if (tokensRemaining >= 40000) canDoTasks.push('Comprehensive code audit');
-  if (tokensRemaining >= 30000) canDoTasks.push('Complex feature planning');
-  if (tokensRemaining >= 20000) canDoTasks.push('Security analysis');
-  if (tokensRemaining >= 10000) canDoTasks.push('Agent orchestration task');
-
-  const suggestions = canDoTasks.slice(0, 3);
-  if (suggestions.length === 0) return '';
-
-  return '<div style="margin-top:1rem;padding:1rem;background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);border-radius:0.75rem;">' +
-    '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">' +
-      '<span style="color:#10b981;font-weight:600;">Proactive Usage Available</span>' +
-      '<span style="background:#10b981;color:#000;font-size:0.7rem;padding:0.2rem 0.5rem;border-radius:1rem;">Use remaining quota</span>' +
-    '</div>' +
-    '<div style="color:var(--text-secondary);font-size:0.85rem;">With ' + formatTokens(tokensRemaining) + ' tokens remaining, you can still do:</div>' +
-    '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.5rem;">' +
-      suggestions.map(function(s) { return '<span style="background:rgba(16,185,129,0.2);color:#34d399;padding:0.25rem 0.75rem;border-radius:1rem;font-size:0.8rem;">' + s + '</span>'; }).join('') +
-    '</div>' +
-  '</div>';
-}
-
-function renderModelTaskMatrix(models, taskTypes, matrix) {
-  // Build matrix from stored data or show placeholder
-  const modelList = Object.keys(models).slice(0, 8);
-  const taskList = Object.keys(taskTypes).slice(0, 6);
-
-  if (modelList.length === 0 || taskList.length === 0) {
-    return '<div style="text-align:center;color:var(--text-secondary);padding:2rem;">No usage data yet. Start using models to see the matrix.</div>';
-  }
-
-  let html = '<div style="overflow-x:auto;"><table style="min-width:600px;">';
-  html += '<thead><tr><th>Model</th>';
-  taskList.forEach(task => {
-    html += '<th style="text-align:center;font-size:0.75rem;">' + task + '</th>';
-  });
-  html += '</tr></thead><tbody>';
-
-  modelList.forEach(model => {
-    const modelData = matrix[model] || {};
-    html += '<tr><td><code style="font-size:0.8rem;">' + model.split('/').pop() + '</code></td>';
-    taskList.forEach(task => {
-      const count = modelData[task] || 0;
-      const intensity = Math.min(count / 10, 1);
-      const bg = count > 0 ? 'rgba(0,255,136,' + (0.1 + intensity * 0.4) + ')' : 'transparent';
-      html += '<td style="text-align:center;background:' + bg + ';font-size:0.85rem;">' + (count || '-') + '</td>';
-    });
-    html += '</tr>';
-  });
-
-  html += '</tbody></table></div>';
-  return html;
 }
 
 function statusPage() {
