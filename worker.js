@@ -817,6 +817,7 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
         <div class="session-info">
           <div class="session-status">${sessionPercent >= 100 ? 'Limit reached' : sessionPercent > 80 ? 'Near limit' : 'Available'}</div>
           <div class="session-reset">Resets in ${sessionTimeLeft}h</div>
+          <div class="session-reset" style="font-size:0.75rem;margin-top:0.25rem;" id="resetTime"></div>
         </div>
       </div>
     </div>
@@ -871,10 +872,23 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
       </div>
     </div>
 
-    <div class="footer">Opus 4.6 • $103/mo • v3.1</div>
+    <div class="footer">Opus 4.6 • $103/mo • v3.1 • <span id="clock"></span></div>
   </div>
 
   <script>
+    // Warsaw timezone
+    function updateClock() {
+      const now = new Date().toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw', hour: '2-digit', minute: '2-digit' });
+      document.getElementById('clock').textContent = now + ' Warsaw';
+    }
+    updateClock();
+    setInterval(updateClock, 60000);
+
+    // Calculate reset time in Warsaw
+    const resetMs = ${maxUsage.timeRemainingMs || 5*60*60*1000};
+    const resetDate = new Date(Date.now() + resetMs);
+    document.getElementById('resetTime').textContent = '(~' + resetDate.toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw', hour: '2-digit', minute: '2-digit' }) + ')';
+
     async function loadActivity() {
       try {
         const r = await fetch('/usage/live');
