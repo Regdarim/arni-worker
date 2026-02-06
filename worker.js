@@ -991,7 +991,7 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
     <div class="config-section" style="margin-bottom:1.5rem;background:linear-gradient(135deg, rgba(124,58,237,0.15), rgba(167,139,250,0.05));border:1px solid #7c3aed;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
         <h3 style="margin:0;color:#a78bfa;display:flex;align-items:center;gap:0.5rem;">
-          <span style="font-size:1.2rem;">🟣</span> Claude Max Usage (Opus 4.6)
+          <span style="font-size:1.2rem;">🟣</span> Claude Max Usage (Opus 4.5)
         </h3>
         <div style="display:flex;gap:1rem;">
           <div style="display:flex;align-items:center;gap:0.5rem;background:rgba(124,58,237,0.2);padding:0.35rem 0.75rem;border-radius:1rem;">
@@ -1163,7 +1163,7 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
         </div>
         <div class="tier tier-4">
           <div class="tier-name">🟣 Tier 4 - Critical/Strategic</div>
-          <div class="tier-models">Claude Opus 4.6</div>
+          <div class="tier-models">Claude Opus 4.5</div>
           <div class="tier-cost" style="color:#a78bfa;">$100/mo subscription</div>
           <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.5rem;">Business planning • Architecture • Security • Agent orchestration</div>
         </div>
