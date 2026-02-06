@@ -865,7 +865,7 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
     .tier-desc { font-size: 0.75rem; color: #888; margin-top: 0.25rem; }
 
     #liveFeed { max-height: 150px; overflow-y: auto; font-size: 0.8rem; }
-    .feed-item { padding: 0.4rem 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; }
+    .feed-item { padding: 0.4rem 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
 
     .btn { padding: 0.5rem 1rem; border: 1px solid rgba(255,255,255,0.2); background: transparent; color: #a78bfa; border-radius: 0.5rem; cursor: pointer; font-size: 0.8rem; }
     .btn:hover { background: rgba(167,139,250,0.1); }
@@ -1069,11 +1069,29 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
       </div>
     </div>
 
-    <footer>Opus 4.6 Dashboard v3.0 | Sessions: ${maxSessions} | Last: ${maxLastSession}</footer>
+    <footer>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span>Opus 4.5 Dashboard v3.1 | Sessions: ${maxSessions}</span>
+        <span id="clock" style="color:#a78bfa;font-weight:500;"></span>
+      </div>
+    </footer>
   </div>
 
   <script>
-    const colors = {anthropic:'#a78bfa', z_ai:'#f59e0b', openrouter:'#10b981', gemini:'#60a5fa', local:'#888'};
+    const colors = {anthropic:'#a78bfa', z_ai:'#f59e0b', openrouter:'#10b981', gemini:'#60a5fa', local:'#888', openai:'#ef4444', codex:'#ef4444'};
+    const TZ = 'Europe/Warsaw';
+
+    // Warsaw time clock
+    function updateClock() {
+      const now = new Date().toLocaleString('pl-PL', {timeZone: TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', day: '2-digit', month: '2-digit'});
+      document.getElementById('clock').textContent = '🕐 ' + now + ' (Warsaw)';
+    }
+    updateClock(); setInterval(updateClock, 1000);
+
+    // Format time in Warsaw timezone
+    function formatWarsawTime(ts) {
+      return new Date(ts).toLocaleString('pl-PL', {timeZone: TZ, hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit'});
+    }
 
     async function loadFeed() {
       try {
@@ -1082,23 +1100,26 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
         const f = document.getElementById('liveFeed');
         if (d.usage?.length) {
           f.innerHTML = d.usage.slice(0,5).map(u =>
-            '<div class="feed-item"><span style="color:'+(colors[u.provider]||'#888')+'">'+(u.model||'?').split('/').pop().slice(0,12)+'</span><span style="color:#888">'+((u.tokens_in||0)+(u.tokens_out||0)).toLocaleString()+'</span></div>'
+            '<div class="feed-item"><span style="color:'+(colors[u.provider]||'#888')+'">'+(u.model||'?').split('/').pop().slice(0,12)+'</span><span style="color:#666;font-size:0.7rem;">'+formatWarsawTime(u.timestamp)+'</span><span style="color:#888">'+((u.tokens_in||0)+(u.tokens_out||0)).toLocaleString()+'</span></div>'
           ).join('');
         } else f.innerHTML = '<div style="color:#888;text-align:center;">No activity</div>';
-      } catch(e) {}
+      } catch(e) { console.error('Feed error:', e); }
     }
-    loadFeed(); setInterval(loadFeed, 30000);
+    loadFeed(); setInterval(loadFeed, 15000); // Refresh every 15s
+
+    // Auto-refresh entire dashboard every 60s
+    setTimeout(() => location.reload(), 60000);
 
     function showLog() {
       const m = document.createElement('div');
       m.id = 'modal';
       m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:100;';
-      m.innerHTML = '<div style="background:#12121a;border:1px solid rgba(255,255,255,0.1);border-radius:0.75rem;width:90%;max-width:700px;max-height:70vh;display:flex;flex-direction:column;"><div style="padding:1rem;border-bottom:1px solid rgba(255,255,255,0.1);display:flex;justify-content:space-between;"><span style="font-weight:600;">Usage Log</span><button onclick="document.getElementById(\\'modal\\').remove()" style="background:none;border:none;color:#888;cursor:pointer;font-size:1.2rem;">&times;</button></div><div id="logContent" style="padding:1rem;overflow-y:auto;flex:1;font-size:0.85rem;">Loading...</div></div>';
+      m.innerHTML = '<div style="background:#12121a;border:1px solid rgba(255,255,255,0.1);border-radius:0.75rem;width:90%;max-width:700px;max-height:70vh;display:flex;flex-direction:column;"><div style="padding:1rem;border-bottom:1px solid rgba(255,255,255,0.1);display:flex;justify-content:space-between;"><span style="font-weight:600;">Usage Log (Warsaw Time)</span><button onclick="document.getElementById(\\'modal\\').remove()" style="background:none;border:none;color:#888;cursor:pointer;font-size:1.2rem;">&times;</button></div><div id="logContent" style="padding:1rem;overflow-y:auto;flex:1;font-size:0.85rem;">Loading...</div></div>';
       document.body.appendChild(m);
       m.onclick = e => { if(e.target===m) m.remove(); };
       fetch('/usage?limit=30').then(r=>r.json()).then(d => {
         document.getElementById('logContent').innerHTML = d.usage?.length
-          ? '<table style="width:100%;border-collapse:collapse;"><thead><tr style="color:#888;text-align:left;font-size:0.75rem;"><th style="padding:0.3rem;">Time</th><th>Model</th><th>Task</th><th>Tokens</th></tr></thead><tbody>'+d.usage.map(u=>'<tr style="border-bottom:1px solid rgba(255,255,255,0.05);"><td style="padding:0.3rem;color:#888;">'+new Date(u.timestamp).toLocaleString()+'</td><td style="color:'+(colors[u.provider]||'#888')+';">'+(u.model||'-')+'</td><td>'+(u.task_type||'-')+'</td><td>'+((u.tokens_in||0)+(u.tokens_out||0)).toLocaleString()+'</td></tr>').join('')+'</tbody></table>'
+          ? '<table style="width:100%;border-collapse:collapse;"><thead><tr style="color:#888;text-align:left;font-size:0.75rem;"><th style="padding:0.3rem;">Time (Warsaw)</th><th>Model</th><th>Task</th><th>Tokens</th></tr></thead><tbody>'+d.usage.map(u=>'<tr style="border-bottom:1px solid rgba(255,255,255,0.05);"><td style="padding:0.3rem;color:#888;">'+formatWarsawTime(u.timestamp)+'</td><td style="color:'+(colors[u.provider]||'#888')+';">'+(u.model||'-')+'</td><td>'+(u.task_type||'-')+'</td><td>'+((u.tokens_in||0)+(u.tokens_out||0)).toLocaleString()+'</td></tr>').join('')+'</tbody></table>'
           : '<div style="color:#888;text-align:center;">No data</div>';
       });
     }
