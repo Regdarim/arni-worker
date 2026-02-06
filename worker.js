@@ -847,7 +847,7 @@ function dashboardPage(stats) {
         <div class="tier tier-4">
           <div class="tier-name">🟣 Tier 4 - Critical/Strategic</div>
           <div class="tier-models">Claude Opus 4.6 (Max $100/mo)</div>
-          <div class="tier-cost">Business planning, architecture, security, high-level strategy</div>
+          <div class="tier-cost">Business planning, architecture, security, agent orchestration, swarm/team management</div>
         </div>
       </div>
     </div>
