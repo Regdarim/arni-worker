@@ -1,5 +1,5 @@
 /**
- * Arni Worker v2.5.0 - Full Autonomous Agent Platform
+ * Arni Worker v2.6.0 - Full Autonomous Agent Platform
  *
  * Features:
  * - Webhook receiver
@@ -61,7 +61,7 @@ export default {
           status: 'ok',
           agent: 'arni',
           timestamp: new Date().toISOString(),
-          version: '2.5.0',
+          version: '2.6.0',
           kv: env.MEMORY ? 'connected' : 'not bound',
           stats,
         }, corsHeaders);
@@ -479,7 +479,7 @@ function getDefaultCfUsage() {
   };
 }
 
-// Claude Max Usage Tracking (5-hour rolling window, ~88k tokens for Max5)
+// Claude Max Usage Tracking (5-hour rolling window + weekly limit)
 async function getClaudeMaxUsage(env) {
   if (!env.MEMORY) return getDefaultMaxUsage();
   const key = 'claude_max_usage';
@@ -492,19 +492,33 @@ async function getClaudeMaxUsage(env) {
     const now = Date.now();
     const windowStart = usage.windowStart || now;
     const windowDuration = 5 * 60 * 60 * 1000; // 5 hours in ms
+    const currentWeekStart = getWeekStart();
 
-    // Check if window has expired (5 hours)
+    // Check if 5h window has expired
     if (now - windowStart > windowDuration) {
-      // Reset window
-      const reset = getDefaultMaxUsage();
-      await env.MEMORY.put(key, JSON.stringify(reset));
-      return reset;
+      usage.tokensUsed = 0;
+      usage.windowStart = now;
+      usage.sessions = 0;
     }
 
-    // Calculate time remaining
-    const timeRemaining = windowDuration - (now - windowStart);
-    usage.timeRemainingMs = timeRemaining;
-    usage.timeRemainingHours = (timeRemaining / (1000 * 60 * 60)).toFixed(1);
+    // Check if week changed
+    if (!usage.weekStart || usage.weekStart < currentWeekStart) {
+      usage.weeklyTokensUsed = 0;
+      usage.weekStart = currentWeekStart;
+    }
+
+    // Calculate time remaining in 5h window
+    const timeRemaining = windowDuration - (now - (usage.windowStart || now));
+    usage.timeRemainingMs = Math.max(0, timeRemaining);
+    usage.timeRemainingHours = (Math.max(0, timeRemaining) / (1000 * 60 * 60)).toFixed(1);
+
+    // Calculate days until Monday reset
+    const msUntilMonday = (currentWeekStart + 7 * 24 * 60 * 60 * 1000) - now;
+    usage.daysUntilWeekReset = Math.ceil(msUntilMonday / (24 * 60 * 60 * 1000));
+
+    // Ensure weekly fields exist
+    usage.weeklyTokensUsed = usage.weeklyTokensUsed || 0;
+    usage.weeklyTokensLimit = usage.weeklyTokensLimit || 400000;
 
     return usage;
   } catch (e) {
@@ -515,18 +529,33 @@ async function getClaudeMaxUsage(env) {
 function getDefaultMaxUsage() {
   return {
     tokensUsed: 0,
-    tokensLimit: 88000, // ~88k for Max5 plan
+    tokensLimit: 88000, // ~88k for Max5 plan per 5h window
     windowStart: Date.now(),
     timeRemainingMs: 5 * 60 * 60 * 1000,
     timeRemainingHours: '5.0',
     sessions: 0,
-    lastSession: null
+    lastSession: null,
+    // Weekly tracking (resets Monday 00:00 UTC)
+    weeklyTokensUsed: 0,
+    weeklyTokensLimit: 400000, // ~400k/week safe estimate for Max5 (15-35h Opus)
+    weekStart: getWeekStart()
   };
+}
+
+function getWeekStart() {
+  const now = new Date();
+  const day = now.getUTCDay();
+  const diff = day === 0 ? 6 : day - 1; // Monday = 0
+  const monday = new Date(now);
+  monday.setUTCDate(now.getUTCDate() - diff);
+  monday.setUTCHours(0, 0, 0, 0);
+  return monday.getTime();
 }
 
 async function updateClaudeMaxUsage(env, tokensIn, tokensOut) {
   if (!env.MEMORY) return;
   const key = 'claude_max_usage';
+  const totalTokens = tokensIn + tokensOut;
 
   // Read raw data to preserve windowStart
   const raw = await env.MEMORY.get(key);
@@ -536,27 +565,41 @@ async function updateClaudeMaxUsage(env, tokensIn, tokensOut) {
     usage = JSON.parse(raw);
     const now = Date.now();
     const windowDuration = 5 * 60 * 60 * 1000;
+    const currentWeekStart = getWeekStart();
 
-    // Check if window expired
+    // Check if 5h window expired
     if (now - usage.windowStart > windowDuration) {
-      usage = getDefaultMaxUsage();
+      // Reset window but keep weekly
+      usage.tokensUsed = 0;
+      usage.windowStart = now;
+      usage.sessions = 0;
+    }
+
+    // Check if week changed (Monday reset)
+    if (!usage.weekStart || usage.weekStart < currentWeekStart) {
+      usage.weeklyTokensUsed = 0;
+      usage.weekStart = currentWeekStart;
     }
   } else {
     usage = getDefaultMaxUsage();
   }
 
-  // Add tokens
-  usage.tokensUsed += (tokensIn + tokensOut);
+  // Add tokens to both window and weekly
+  usage.tokensUsed += totalTokens;
+  usage.weeklyTokensUsed = (usage.weeklyTokensUsed || 0) + totalTokens;
   usage.sessions++;
   usage.lastSession = new Date().toISOString();
 
-  // Store (without calculated fields)
+  // Store
   const toStore = {
     tokensUsed: usage.tokensUsed,
     tokensLimit: usage.tokensLimit,
     windowStart: usage.windowStart,
     sessions: usage.sessions,
-    lastSession: usage.lastSession
+    lastSession: usage.lastSession,
+    weeklyTokensUsed: usage.weeklyTokensUsed,
+    weeklyTokensLimit: usage.weeklyTokensLimit || 400000,
+    weekStart: usage.weekStart || getWeekStart()
   };
 
   await env.MEMORY.put(key, JSON.stringify(toStore));
@@ -658,7 +701,7 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
   const daily = stats.daily || {};
   const totals = stats.totals || { requests: 0, tokens_in: 0, tokens_out: 0, cost: 0, savings: 0 };
 
-  // Claude Max usage defaults
+  // Claude Max usage defaults (5h window)
   const maxTokensUsed = maxUsage.tokensUsed || 0;
   const maxTokensLimit = maxUsage.tokensLimit || 88000;
   const maxTimeRemaining = maxUsage.timeRemainingHours || '5.0';
@@ -666,6 +709,13 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
   const maxPercentUsed = Math.min((maxTokensUsed / maxTokensLimit) * 100, 100);
   const maxTokensRemaining = Math.max(maxTokensLimit - maxTokensUsed, 0);
   const maxLastSession = maxUsage.lastSession ? new Date(maxUsage.lastSession).toLocaleTimeString() : 'Never';
+
+  // Weekly limits
+  const weeklyUsed = maxUsage.weeklyTokensUsed || 0;
+  const weeklyLimit = maxUsage.weeklyTokensLimit || 400000;
+  const weeklyPercent = Math.min((weeklyUsed / weeklyLimit) * 100, 100);
+  const weeklyRemaining = Math.max(weeklyLimit - weeklyUsed, 0);
+  const daysUntilReset = maxUsage.daysUntilWeekReset || 7;
 
   // Get last 7 days for chart
   const last7Days = [];
@@ -930,43 +980,70 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
         <h3 style="margin:0;color:#a78bfa;display:flex;align-items:center;gap:0.5rem;">
           <span style="font-size:1.2rem;">🟣</span> Claude Max Usage (Opus 4.6)
         </h3>
-        <div style="display:flex;align-items:center;gap:0.5rem;background:rgba(124,58,237,0.2);padding:0.35rem 0.75rem;border-radius:1rem;">
-          <span style="color:var(--text-secondary);font-size:0.8rem;">Window resets in:</span>
-          <span style="color:#a78bfa;font-weight:600;">${maxTimeRemaining}h</span>
+        <div style="display:flex;gap:1rem;">
+          <div style="display:flex;align-items:center;gap:0.5rem;background:rgba(124,58,237,0.2);padding:0.35rem 0.75rem;border-radius:1rem;">
+            <span style="color:var(--text-secondary);font-size:0.75rem;">5h window:</span>
+            <span style="color:#a78bfa;font-weight:600;">${maxTimeRemaining}h</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:0.5rem;background:rgba(59,130,246,0.2);padding:0.35rem 0.75rem;border-radius:1rem;">
+            <span style="color:var(--text-secondary);font-size:0.75rem;">Week resets:</span>
+            <span style="color:#60a5fa;font-weight:600;">${daysUntilReset}d</span>
+          </div>
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.5rem;">
-        <!-- Main Progress -->
-        <div style="grid-column:span 2;">
-          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:0.5rem;">
-            <span style="font-size:2rem;font-weight:700;color:${maxPercentUsed > 80 ? '#ef4444' : maxPercentUsed > 50 ? '#f59e0b' : '#a78bfa'};">${formatTokens(maxTokensUsed)}</span>
-            <span style="color:var(--text-secondary);font-size:0.9rem;">of ${formatTokens(maxTokensLimit)} tokens</span>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;">
+        <!-- 5h Window Progress -->
+        <div style="background:var(--bg-secondary);padding:1rem;border-radius:0.75rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+            <span style="color:var(--text-secondary);font-size:0.85rem;">⏱️ 5-Hour Window</span>
+            <span style="font-size:0.8rem;color:${maxPercentUsed > 80 ? '#ef4444' : maxPercentUsed > 50 ? '#f59e0b' : '#10b981'};">${maxPercentUsed.toFixed(0)}%</span>
           </div>
-          <div style="height:12px;background:rgba(255,255,255,0.1);border-radius:6px;overflow:hidden;margin-bottom:0.75rem;">
-            <div style="height:100%;width:${maxPercentUsed}%;background:linear-gradient(90deg, #7c3aed, ${maxPercentUsed > 80 ? '#ef4444' : maxPercentUsed > 50 ? '#f59e0b' : '#a78bfa'});transition:width 0.5s;"></div>
+          <div style="display:flex;align-items:baseline;gap:0.5rem;margin-bottom:0.5rem;">
+            <span style="font-size:1.75rem;font-weight:700;color:${maxPercentUsed > 80 ? '#ef4444' : maxPercentUsed > 50 ? '#f59e0b' : '#a78bfa'};">${formatTokens(maxTokensUsed)}</span>
+            <span style="color:var(--text-secondary);font-size:0.85rem;">/ ${formatTokens(maxTokensLimit)}</span>
           </div>
-          <div style="display:flex;justify-content:space-between;font-size:0.85rem;">
-            <span style="color:var(--text-secondary);">${maxPercentUsed.toFixed(1)}% used</span>
-            <span style="color:#10b981;font-weight:500;">${formatTokens(maxTokensRemaining)} remaining</span>
+          <div style="height:8px;background:rgba(255,255,255,0.1);border-radius:4px;overflow:hidden;margin-bottom:0.5rem;">
+            <div style="height:100%;width:${maxPercentUsed}%;background:linear-gradient(90deg, #7c3aed, ${maxPercentUsed > 80 ? '#ef4444' : maxPercentUsed > 50 ? '#f59e0b' : '#a78bfa'});"></div>
           </div>
+          <div style="font-size:0.8rem;color:#10b981;">${formatTokens(maxTokensRemaining)} remaining</div>
         </div>
 
-        <!-- Quick Stats -->
-        <div style="display:flex;flex-direction:column;gap:0.75rem;">
-          <div style="background:var(--bg-secondary);padding:0.75rem;border-radius:0.5rem;">
-            <div style="color:var(--text-secondary);font-size:0.75rem;">Sessions this window</div>
-            <div style="font-size:1.25rem;font-weight:600;color:var(--text-primary);">${maxSessions}</div>
+        <!-- Weekly Progress -->
+        <div style="background:var(--bg-secondary);padding:1rem;border-radius:0.75rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+            <span style="color:var(--text-secondary);font-size:0.85rem;">📅 Weekly Limit</span>
+            <span style="font-size:0.8rem;color:${weeklyPercent > 80 ? '#ef4444' : weeklyPercent > 50 ? '#f59e0b' : '#10b981'};">${weeklyPercent.toFixed(0)}%</span>
           </div>
-          <div style="background:var(--bg-secondary);padding:0.75rem;border-radius:0.5rem;">
-            <div style="color:var(--text-secondary);font-size:0.75rem;">Last session</div>
-            <div style="font-size:0.9rem;color:var(--text-primary);">${maxLastSession}</div>
+          <div style="display:flex;align-items:baseline;gap:0.5rem;margin-bottom:0.5rem;">
+            <span style="font-size:1.75rem;font-weight:700;color:${weeklyPercent > 80 ? '#ef4444' : weeklyPercent > 50 ? '#f59e0b' : '#3b82f6'};">${formatTokens(weeklyUsed)}</span>
+            <span style="color:var(--text-secondary);font-size:0.85rem;">/ ${formatTokens(weeklyLimit)}</span>
           </div>
+          <div style="height:8px;background:rgba(255,255,255,0.1);border-radius:4px;overflow:hidden;margin-bottom:0.5rem;">
+            <div style="height:100%;width:${weeklyPercent}%;background:linear-gradient(90deg, #3b82f6, ${weeklyPercent > 80 ? '#ef4444' : weeklyPercent > 50 ? '#f59e0b' : '#60a5fa'});"></div>
+          </div>
+          <div style="font-size:0.8rem;color:#10b981;">${formatTokens(weeklyRemaining)} remaining this week</div>
+        </div>
+      </div>
+
+      <!-- Quick Stats Row -->
+      <div style="display:flex;gap:1rem;margin-top:1rem;">
+        <div style="flex:1;background:var(--bg-secondary);padding:0.75rem;border-radius:0.5rem;text-align:center;">
+          <div style="color:var(--text-secondary);font-size:0.7rem;">SESSIONS</div>
+          <div style="font-size:1.1rem;font-weight:600;color:var(--text-primary);">${maxSessions}</div>
+        </div>
+        <div style="flex:1;background:var(--bg-secondary);padding:0.75rem;border-radius:0.5rem;text-align:center;">
+          <div style="color:var(--text-secondary);font-size:0.7rem;">LAST ACTIVE</div>
+          <div style="font-size:0.9rem;color:var(--text-primary);">${maxLastSession}</div>
+        </div>
+        <div style="flex:1;background:var(--bg-secondary);padding:0.75rem;border-radius:0.5rem;text-align:center;">
+          <div style="color:var(--text-secondary);font-size:0.7rem;">STATUS</div>
+          <div style="font-size:0.9rem;color:${maxPercentUsed > 90 || weeklyPercent > 90 ? '#ef4444' : '#10b981'};">${maxPercentUsed > 90 || weeklyPercent > 90 ? '⚠️ Near Limit' : '✅ Available'}</div>
         </div>
       </div>
 
       <!-- Proactive Usage Suggestion -->
-      ${maxTokensRemaining > 20000 ? renderProactiveBox(maxTokensRemaining) : ''}
+      ${Math.min(maxTokensRemaining, weeklyRemaining) > 20000 ? renderProactiveBox(Math.min(maxTokensRemaining, weeklyRemaining)) : ''}
     </div>
 
     <!-- Monthly Subscriptions Summary -->
