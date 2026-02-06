@@ -945,24 +945,52 @@ function dashboardPage(stats, cfUsage = {}, maxUsage = {}) {
 
     <!-- ROUTING RULES -->
     <div class="card" style="margin-bottom:1rem;">
-      <div class="card-title" style="margin-bottom:1rem;">🧠 Routing Rules (I am the orchestrator)</div>
-      <div class="grid grid-3" style="gap:0.75rem;">
+      <div class="card-title" style="margin-bottom:1rem;">🧠 Task Routing Strategy</div>
+      <div class="grid" style="grid-template-columns: repeat(4, 1fr); gap:0.5rem;">
         <div class="tier tier-purple">
-          <div class="tier-name">Opus 4.6 (ME)</div>
-          <div class="tier-desc">Architecture • Security • Planning • Orchestration</div>
-          <div style="font-size:0.7rem;color:#a78bfa;margin-top:0.25rem;">$100/mo Max</div>
+          <div class="tier-name">T0: Opus 4.5 (ME)</div>
+          <div class="tier-desc">Orchestration • Security • Architecture • Planning • Decisions</div>
+          <div style="font-size:0.65rem;color:#a78bfa;margin-top:0.25rem;">$100/mo Max | I decide, delegate, review</div>
+        </div>
+        <div class="tier" style="border-color:#ef4444;">
+          <div class="tier-name" style="color:#ef4444;">T1: Codex CLI</div>
+          <div class="tier-desc">Implementation • Refactoring • Tests • Bulk Coding</div>
+          <div style="font-size:0.65rem;color:#ef4444;margin-top:0.25rem;">GPT-5.2-Codex | ChatGPT limits</div>
         </div>
         <div class="tier tier-yellow">
-          <div class="tier-name">Z.ai GLM</div>
-          <div class="tier-desc">Coding • Tests • Refactoring • Bulk</div>
-          <div style="font-size:0.7rem;color:#f59e0b;margin-top:0.25rem;">$3/mo (delegate here)</div>
+          <div class="tier-name">T2: Sonnet/Haiku</div>
+          <div class="tier-desc">Research • Code Review • Exploration • Simple Tasks</div>
+          <div style="font-size:0.65rem;color:#f59e0b;margin-top:0.25rem;">Claude subagents | Parallel</div>
         </div>
         <div class="tier tier-green">
-          <div class="tier-name">Free Models</div>
-          <div class="tier-desc">Simple • Formatting • Translation</div>
-          <div style="font-size:0.7rem;color:#10b981;margin-top:0.25rem;">OpenRouter / Gemini</div>
+          <div class="tier-name">T3: Free/Z.ai</div>
+          <div class="tier-desc">Formatting • Translation • Trivial • Fallback</div>
+          <div style="font-size:0.65rem;color:#10b981;margin-top:0.25rem;">OpenRouter / Gemini / $3 GLM</div>
         </div>
       </div>
+      <div style="margin-top:0.75rem;padding:0.5rem;background:rgba(255,255,255,0.02);border-radius:0.5rem;font-size:0.7rem;color:#888;">
+        <strong style="color:#a78bfa;">Flow:</strong> Task → <span style="color:#a78bfa;">Opus analyzes</span> → Routes to optimal tier → <span style="color:#a78bfa;">Opus reviews & synthesizes</span>
+      </div>
+    </div>
+
+    <!-- ROUTING MATRIX -->
+    <div class="card" style="margin-bottom:1rem;">
+      <div class="card-title" style="margin-bottom:0.75rem;">📋 Routing Matrix</div>
+      <table class="heatmap" style="font-size:0.75rem;">
+        <thead>
+          <tr><th style="text-align:left;">Task Type</th><th>Primary</th><th>Fallback</th><th>Parallel?</th></tr>
+        </thead>
+        <tbody>
+          <tr><td style="text-align:left;color:#a78bfa;">🎯 Planning/Architecture</td><td style="color:#a78bfa;">Opus</td><td>-</td><td>No</td></tr>
+          <tr><td style="text-align:left;color:#f43f5e;">🔒 Security Audit</td><td style="color:#a78bfa;">Opus</td><td>-</td><td>No</td></tr>
+          <tr><td style="text-align:left;color:#ef4444;">💻 Implementation</td><td style="color:#ef4444;">Codex</td><td style="color:#a78bfa;">Opus</td><td>Yes</td></tr>
+          <tr><td style="text-align:left;color:#06b6d4;">🔧 Refactoring</td><td style="color:#ef4444;">Codex</td><td style="color:#a78bfa;">Opus</td><td>Yes</td></tr>
+          <tr><td style="text-align:left;color:#10b981;">🧪 Tests Writing</td><td style="color:#ef4444;">Codex</td><td style="color:#f59e0b;">Sonnet</td><td>Yes</td></tr>
+          <tr><td style="text-align:left;color:#8b5cf6;">📝 Code Review</td><td style="color:#f59e0b;">Haiku x3</td><td>-</td><td>Yes (3 parallel)</td></tr>
+          <tr><td style="text-align:left;color:#818cf8;">🔍 Research</td><td style="color:#f59e0b;">Haiku</td><td style="color:#10b981;">Brave</td><td>Yes</td></tr>
+          <tr><td style="text-align:left;color:#888;">⚡ Simple/Trivial</td><td style="color:#10b981;">Free</td><td style="color:#f59e0b;">Haiku</td><td>No</td></tr>
+        </tbody>
+      </table>
     </div>
 
     <!-- COSTS & STATS -->
