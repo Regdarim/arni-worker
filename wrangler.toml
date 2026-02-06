@@ -1,0 +1,6 @@
+name = "arni-webhook"
+main = "src/index.js"
+compatibility_date = "2024-12-30"
+
+[vars]
+ENVIRONMENT = "production"
