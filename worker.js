@@ -395,6 +395,50 @@ export default {
         return json(data, corsHeaders);
       }
 
+      // ==================== R2 STORAGE ====================
+
+      // Upload file to R2
+      if (path.startsWith('/api/storage/') && method === 'PUT') {
+        if (!env.STORAGE) return json({ error: 'R2 not configured' }, corsHeaders, 500);
+        const key = path.replace('/api/storage/', '');
+        const body = await request.arrayBuffer();
+        const contentType = request.headers.get('Content-Type') || 'application/octet-stream';
+        await env.STORAGE.put(key, body, { httpMetadata: { contentType } });
+        return json({ uploaded: true, key, size: body.byteLength }, corsHeaders);
+      }
+
+      // Get file from R2
+      if (path.startsWith('/api/storage/') && method === 'GET') {
+        if (!env.STORAGE) return json({ error: 'R2 not configured' }, corsHeaders, 500);
+        const key = path.replace('/api/storage/', '');
+        const object = await env.STORAGE.get(key);
+        if (!object) return json({ error: 'Not found' }, corsHeaders, 404);
+        const headers = new Headers(corsHeaders);
+        headers.set('Content-Type', object.httpMetadata?.contentType || 'application/octet-stream');
+        headers.set('Content-Length', object.size);
+        return new Response(object.body, { headers });
+      }
+
+      // Delete file from R2
+      if (path.startsWith('/api/storage/') && method === 'DELETE') {
+        if (!env.STORAGE) return json({ error: 'R2 not configured' }, corsHeaders, 500);
+        const key = path.replace('/api/storage/', '');
+        await env.STORAGE.delete(key);
+        return json({ deleted: true, key }, corsHeaders);
+      }
+
+      // List files in R2
+      if (path === '/api/storage' && method === 'GET') {
+        if (!env.STORAGE) return json({ error: 'R2 not configured' }, corsHeaders, 500);
+        const prefix = url.searchParams.get('prefix') || '';
+        const limit = parseInt(url.searchParams.get('limit') || '100');
+        const list = await env.STORAGE.list({ prefix, limit });
+        return json({
+          objects: list.objects.map(o => ({ key: o.key, size: o.size, uploaded: o.uploaded })),
+          truncated: list.truncated
+        }, corsHeaders);
+      }
+
       // ==================== FAKTUROWNIA API ====================
 
       // List invoices

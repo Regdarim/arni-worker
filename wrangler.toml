@@ -11,6 +11,10 @@ binding = "DB"
 database_name = "arni-db"
 database_id = "8e2fafe6-9210-43e6-969b-27a08770ba0c"
 
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "arni-storage"
+
 [triggers]
 crons = ["0 * * * *"]
 
