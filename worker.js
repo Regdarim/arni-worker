@@ -330,13 +330,11 @@ export default {
 
       // ==================== MODEL USAGE ====================
 
-      // Log model usage
+      // Log model usage (D1 primary, KV fallback)
       if (path === '/usage' && method === 'POST') {
-        if (!env.MEMORY) return json({ error: 'KV not bound' }, corsHeaders, 500);
         const body = await request.json();
         const { provider, model, tokens_in, tokens_out, cost, task_type, success } = body;
 
-        const id = `usage:${Date.now()}`;
         const usage = {
           timestamp: new Date().toISOString(),
           provider: provider || 'unknown',
@@ -348,18 +346,51 @@ export default {
           success: success !== false,
         };
 
-        await env.MEMORY.put(id, JSON.stringify(usage), { expirationTtl: 86400 * 90 }); // 90 days
+        let id;
+        // Try D1 first
+        if (env.DB) {
+          try {
+            const result = await env.DB.prepare(
+              'INSERT INTO analytics (provider, model, tokens_in, tokens_out, cost, task_type, success) VALUES (?, ?, ?, ?, ?, ?, ?)'
+            ).bind(usage.provider, usage.model, usage.tokens_in, usage.tokens_out, usage.cost, usage.task_type, usage.success ? 1 : 0).run();
+            id = `d1:${result.meta.last_row_id}`;
+          } catch (e) {
+            console.error('D1 insert failed:', e);
+          }
+        }
 
-        // Update aggregated stats
-        await updateModelStats(env, usage);
+        // Fallback to KV
+        if (!id && env.MEMORY) {
+          id = `usage:${Date.now()}`;
+          await env.MEMORY.put(id, JSON.stringify(usage), { expirationTtl: 86400 * 90 });
+        }
 
-        return json({ logged: true, id }, corsHeaders);
+        // Update aggregated stats (still in KV for now)
+        if (env.MEMORY) {
+          await updateModelStats(env, usage);
+        }
+
+        return json({ logged: true, id, storage: id?.startsWith('d1:') ? 'd1' : 'kv' }, corsHeaders);
       }
 
-      // Get usage history
+      // Get usage history (D1 primary, KV fallback)
       if (path === '/usage' && method === 'GET') {
-        if (!env.MEMORY) return json({ error: 'KV not bound' }, corsHeaders, 500);
         const limit = parseInt(url.searchParams.get('limit') || '100');
+
+        // Try D1 first
+        if (env.DB) {
+          try {
+            const result = await env.DB.prepare(
+              'SELECT id, provider, model, tokens_in, tokens_out, cost, task_type, success, created_at as timestamp FROM analytics ORDER BY id DESC LIMIT ?'
+            ).bind(limit).all();
+            return json({ usage: result.results, storage: 'd1' }, corsHeaders);
+          } catch (e) {
+            console.error('D1 query failed:', e);
+          }
+        }
+
+        // Fallback to KV
+        if (!env.MEMORY) return json({ error: 'No storage bound' }, corsHeaders, 500);
         const list = await env.MEMORY.list({ prefix: 'usage:', limit });
         const usage = await Promise.all(
           list.keys.map(async k => {
@@ -367,7 +398,7 @@ export default {
             return val ? { id: k.name, ...JSON.parse(val) } : null;
           })
         );
-        return json({ usage: usage.filter(Boolean).reverse() }, corsHeaders);
+        return json({ usage: usage.filter(Boolean).reverse(), storage: 'kv' }, corsHeaders);
       }
 
       // Get model stats
@@ -376,9 +407,22 @@ export default {
         return json({ stats }, corsHeaders);
       }
 
-      // Live usage feed (last 10)
+      // Live usage feed (last 10) - D1 primary
       if (path === '/usage/live' && method === 'GET') {
-        if (!env.MEMORY) return json({ error: 'KV not bound' }, corsHeaders, 500);
+        // Try D1 first
+        if (env.DB) {
+          try {
+            const result = await env.DB.prepare(
+              'SELECT id, provider, model, tokens_in, tokens_out, cost, task_type, success, created_at as timestamp FROM analytics ORDER BY id DESC LIMIT 10'
+            ).all();
+            return json({ usage: result.results, storage: 'd1' }, corsHeaders);
+          } catch (e) {
+            console.error('D1 query failed:', e);
+          }
+        }
+
+        // Fallback to KV
+        if (!env.MEMORY) return json({ error: 'No storage bound' }, corsHeaders, 500);
         const list = await env.MEMORY.list({ prefix: 'usage:', limit: 10 });
         const usage = await Promise.all(
           list.keys.map(async k => {
@@ -386,7 +430,7 @@ export default {
             return val ? JSON.parse(val) : null;
           })
         );
-        return json({ usage: usage.filter(Boolean).reverse() }, corsHeaders);
+        return json({ usage: usage.filter(Boolean).reverse(), storage: 'kv' }, corsHeaders);
       }
 
       // 404
