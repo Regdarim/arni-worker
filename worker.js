@@ -328,6 +328,61 @@ export default {
         return json({ stats }, corsHeaders);
       }
 
+      // ==================== HEALTH CHECK ====================
+
+      // Manual VPS health check
+      if (path === '/api/health/vps' && method === 'GET') {
+        try {
+          const start = Date.now();
+          const response = await fetch('http://161.97.121.62:18799/health', {
+            signal: AbortSignal.timeout(10000)
+          });
+          const latency = Date.now() - start;
+          const data = await response.json().catch(() => ({}));
+
+          return json({
+            status: response.ok ? 'ok' : 'error',
+            latency_ms: latency,
+            http_status: response.status,
+            vps_response: data
+          }, corsHeaders);
+        } catch (e) {
+          return json({
+            status: 'unreachable',
+            error: e.message
+          }, corsHeaders, 503);
+        }
+      }
+
+      // Health check history
+      if (path === '/api/health/history' && method === 'GET') {
+        if (!env.DB) return json({ error: 'D1 not configured' }, corsHeaders, 500);
+        const result = await env.DB.prepare(
+          "SELECT * FROM logs WHERE category = 'health' ORDER BY id DESC LIMIT 50"
+        ).all();
+        return json({ checks: result.results }, corsHeaders);
+      }
+
+      // ==================== QUEUE API ====================
+
+      // Add job to queue
+      if (path === '/api/queue' && method === 'POST') {
+        if (!env.JOBS_QUEUE) return json({ error: 'Queue not configured' }, corsHeaders, 500);
+        const body = await request.json();
+        await env.JOBS_QUEUE.send(body);
+        await log(env, 'queue', `Job queued: ${body.type}`);
+        return json({ queued: true, job: body.type }, corsHeaders);
+      }
+
+      // Get queue status
+      if (path === '/api/queue/status' && method === 'GET') {
+        if (!env.DB) return json({ error: 'D1 not configured' }, corsHeaders, 500);
+        const result = await env.DB.prepare(
+          "SELECT * FROM logs WHERE category = 'queue' ORDER BY id DESC LIMIT 20"
+        ).all();
+        return json({ jobs: result.results }, corsHeaders);
+      }
+
       // ==================== NOTION API ====================
 
       // Search Notion databases
@@ -596,16 +651,108 @@ export default {
     }
   },
 
-  // Cron handler
+  // Cron handler - runs every hour
   async scheduled(event, env, ctx) {
     const now = new Date().toISOString();
     await log(env, 'cron', `Scheduled run at ${now}`);
     await incrementStat(env, 'cron_runs');
 
-    // Add your scheduled tasks here
-    // Example: cleanup old webhooks, send reports, etc.
+    // Health check OpenClaw VPS
+    try {
+      const vpsResponse = await fetch('http://161.97.121.62:18799/health', {
+        signal: AbortSignal.timeout(10000)
+      });
+
+      if (!vpsResponse.ok) {
+        await sendTelegramAlert(env, '🚨 OpenClaw VPS health check failed! Status: ' + vpsResponse.status);
+        await log(env, 'health', `VPS DOWN - status ${vpsResponse.status}`);
+      } else {
+        await log(env, 'health', 'VPS OK');
+      }
+    } catch (e) {
+      await sendTelegramAlert(env, '🚨 OpenClaw VPS unreachable! Error: ' + e.message);
+      await log(env, 'health', `VPS UNREACHABLE - ${e.message}`);
+    }
+
+    // Cleanup old logs (keep 7 days)
+    if (env.DB) {
+      try {
+        await env.DB.prepare(
+          "DELETE FROM logs WHERE created_at < datetime('now', '-7 days')"
+        ).run();
+      } catch (e) {
+        console.error('Cleanup failed:', e);
+      }
+    }
   }
 };
+
+  // Queue consumer handler
+  async queue(batch, env) {
+    for (const message of batch.messages) {
+      const job = message.body;
+      console.log(`Processing job: ${job.type}`);
+
+      try {
+        switch (job.type) {
+          case 'notion-sync':
+            // Sync data with Notion
+            await log(env, 'queue', `Notion sync started: ${job.entity}`);
+            break;
+
+          case 'backup':
+            // Backup to R2
+            await log(env, 'queue', `Backup started: ${job.target}`);
+            break;
+
+          case 'invoice':
+            // Generate invoice in Fakturownia
+            await log(env, 'queue', `Invoice job: ${job.action}`);
+            break;
+
+          case 'alert':
+            // Send alert
+            await sendTelegramAlert(env, job.message);
+            await log(env, 'queue', `Alert sent: ${job.message.substring(0, 50)}`);
+            break;
+
+          default:
+            await log(env, 'queue', `Unknown job type: ${job.type}`);
+        }
+        message.ack();
+      } catch (e) {
+        console.error(`Job failed: ${e.message}`);
+        await log(env, 'queue', `Job failed: ${job.type} - ${e.message}`);
+        message.retry();
+      }
+    }
+  }
+};
+
+// Send Telegram alert
+async function sendTelegramAlert(env, message) {
+  const TELEGRAM_BOT_TOKEN = env.TELEGRAM_BOT_TOKEN;
+  const TELEGRAM_CHAT_ID = '6616725127'; // Dawid
+
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.error('No Telegram bot token configured');
+    return;
+  }
+
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text: message,
+        parse_mode: 'HTML'
+      })
+    });
+  } catch (e) {
+    console.error('Telegram alert failed:', e);
+  }
+}
 
 // Helper functions
 function json(data, corsHeaders, status = 200) {

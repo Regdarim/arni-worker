@@ -15,8 +15,17 @@ database_id = "8e2fafe6-9210-43e6-969b-27a08770ba0c"
 binding = "STORAGE"
 bucket_name = "arni-storage"
 
+[[queues.producers]]
+binding = "JOBS_QUEUE"
+queue = "arni-jobs"
+
+[[queues.consumers]]
+queue = "arni-jobs"
+max_batch_size = 10
+max_batch_timeout = 30
+
 [triggers]
-crons = ["0 * * * *"]
+crons = ["*/5 * * * *"]  # Every 5 minutes - health check
 
 [vars]
 ENVIRONMENT = "production"
