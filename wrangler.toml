@@ -6,6 +6,11 @@ kv_namespaces = [
   { binding = "MEMORY", id = "0b07688ee5a24c718688f9a6a2889068" }
 ]
 
+[[d1_databases]]
+binding = "DB"
+database_name = "arni-db"
+database_id = "8e2fafe6-9210-43e6-969b-27a08770ba0c"
+
 [triggers]
 crons = ["0 * * * *"]
 
