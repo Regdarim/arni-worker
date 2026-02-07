@@ -684,8 +684,7 @@ export default {
         console.error('Cleanup failed:', e);
       }
     }
-  }
-};
+  },
 
   // Queue consumer handler
   async queue(batch, env) {
