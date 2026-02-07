@@ -328,6 +328,116 @@ export default {
         return json({ stats }, corsHeaders);
       }
 
+      // ==================== NOTION API ====================
+
+      // Search Notion databases
+      if (path === '/api/notion/search' && method === 'POST') {
+        if (!env.NOTION_API_KEY) return json({ error: 'Notion not configured' }, corsHeaders, 500);
+        const body = await request.json();
+        const response = await fetch('https://api.notion.com/v1/search', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${env.NOTION_API_KEY}`,
+            'Notion-Version': '2022-06-28',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
+        const data = await response.json();
+        return json(data, corsHeaders);
+      }
+
+      // Query Notion database
+      if (path.startsWith('/api/notion/database/') && method === 'POST') {
+        if (!env.NOTION_API_KEY) return json({ error: 'Notion not configured' }, corsHeaders, 500);
+        const dbId = path.replace('/api/notion/database/', '').replace('/query', '');
+        const body = await request.json();
+        const response = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${env.NOTION_API_KEY}`,
+            'Notion-Version': '2022-06-28',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
+        const data = await response.json();
+        return json(data, corsHeaders);
+      }
+
+      // Get/Create Notion page
+      if (path.startsWith('/api/notion/page/') && method === 'GET') {
+        if (!env.NOTION_API_KEY) return json({ error: 'Notion not configured' }, corsHeaders, 500);
+        const pageId = path.replace('/api/notion/page/', '');
+        const response = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+          headers: {
+            'Authorization': `Bearer ${env.NOTION_API_KEY}`,
+            'Notion-Version': '2022-06-28',
+          },
+        });
+        const data = await response.json();
+        return json(data, corsHeaders);
+      }
+
+      if (path === '/api/notion/pages' && method === 'POST') {
+        if (!env.NOTION_API_KEY) return json({ error: 'Notion not configured' }, corsHeaders, 500);
+        const body = await request.json();
+        const response = await fetch('https://api.notion.com/v1/pages', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${env.NOTION_API_KEY}`,
+            'Notion-Version': '2022-06-28',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
+        const data = await response.json();
+        return json(data, corsHeaders);
+      }
+
+      // ==================== FAKTUROWNIA API ====================
+
+      // List invoices
+      if (path === '/api/invoices' && method === 'GET') {
+        if (!env.FAKTUROWNIA_USER || !env.FAKTUROWNIA_TOKEN) return json({ error: 'Fakturownia not configured' }, corsHeaders, 500);
+        const page = url.searchParams.get('page') || '1';
+        const response = await fetch(`https://${env.FAKTUROWNIA_USER}.fakturownia.pl/invoices.json?page=${page}&api_token=${env.FAKTUROWNIA_TOKEN}`);
+        const data = await response.json();
+        return json(data, corsHeaders);
+      }
+
+      // Get single invoice
+      if (path.match(/^\/api\/invoices\/\d+$/) && method === 'GET') {
+        if (!env.FAKTUROWNIA_USER || !env.FAKTUROWNIA_TOKEN) return json({ error: 'Fakturownia not configured' }, corsHeaders, 500);
+        const invoiceId = path.replace('/api/invoices/', '');
+        const response = await fetch(`https://${env.FAKTUROWNIA_USER}.fakturownia.pl/invoices/${invoiceId}.json?api_token=${env.FAKTUROWNIA_TOKEN}`);
+        const data = await response.json();
+        return json(data, corsHeaders);
+      }
+
+      // Create invoice
+      if (path === '/api/invoices' && method === 'POST') {
+        if (!env.FAKTUROWNIA_USER || !env.FAKTUROWNIA_TOKEN) return json({ error: 'Fakturownia not configured' }, corsHeaders, 500);
+        const body = await request.json();
+        const response = await fetch(`https://${env.FAKTUROWNIA_USER}.fakturownia.pl/invoices.json`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_token: env.FAKTUROWNIA_TOKEN, invoice: body }),
+        });
+        const data = await response.json();
+        return json(data, corsHeaders);
+      }
+
+      // Get invoice PDF
+      if (path.match(/^\/api\/invoices\/\d+\/pdf$/) && method === 'GET') {
+        if (!env.FAKTUROWNIA_USER || !env.FAKTUROWNIA_TOKEN) return json({ error: 'Fakturownia not configured' }, corsHeaders, 500);
+        const invoiceId = path.replace('/api/invoices/', '').replace('/pdf', '');
+        const response = await fetch(`https://${env.FAKTUROWNIA_USER}.fakturownia.pl/invoices/${invoiceId}.pdf?api_token=${env.FAKTUROWNIA_TOKEN}`);
+        return new Response(response.body, {
+          headers: { 'Content-Type': 'application/pdf', ...corsHeaders },
+        });
+      }
+
       // ==================== MODEL USAGE ====================
 
       // Log model usage (D1 primary, KV fallback)
